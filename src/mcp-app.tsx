@@ -56,12 +56,6 @@ interface PlayerStats {
   medals: MedalEarned[];
 }
 
-interface RankLadderEntry {
-  tier: string;
-  count: number;
-  isCurrent: boolean;
-}
-
 interface CareerProgression {
   currentRank: number;
   isHero: boolean;
@@ -75,7 +69,6 @@ interface CareerProgression {
   totalXpRequired: number;
   overallProgress: number;
   totalRanks: number;
-  rankLadder: RankLadderEntry[];
   rankIconUrl: string | null;
 }
 
@@ -270,7 +263,9 @@ function Dashboard({ toolResult, hostContext }: DashboardProps) {
         paddingLeft: hostContext?.safeAreaInsets?.left,
         maxWidth: 640,
         margin: '0 auto',
-        padding: '16px',
+        padding: '10px',
+        background: C.bg,
+        color: C.text,
       }}
     >
       {/* Tab bar — only show if more than one tab */}
@@ -314,87 +309,90 @@ function MatchTab({ match, player, spriteSheet }: { match: MatchMeta | null; pla
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {/* Match header */}
       <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <span
-            style={{
-              ...styles.badge,
-              background: outcomeColor(player.outcome),
-              color: '#000',
-            }}
-          >
-            {outcomeLabel(player.outcome)}
-          </span>
-          <div>
-            <div style={styles.cardTitle}>{match.mapName}</div>
-            <div style={styles.cardSubtitle}>
-              {match.modeName}
-              {match.playlistName ? ` — ${match.playlistName}` : ''}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span
+              style={{
+                ...styles.badge,
+                background: 'transparent',
+                borderColor: outcomeColor(player.outcome),
+                color: outcomeColor(player.outcome),
+              }}
+            >
+              {outcomeLabel(player.outcome)}
+            </span>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, letterSpacing: '0.5px' }}>{match.mapName}</div>
+              <div style={styles.cardSubtitle}>
+                {match.modeName}{match.playlistName ? ` — ${match.playlistName}` : ''}
+              </div>
             </div>
           </div>
-        </div>
-        <div style={{ ...styles.meta, marginTop: 8 }}>
-          {match.endTime && <span>{formatDate(match.endTime)}</span>}
-          {match.duration && <span>{formatDuration(match.duration)}</span>}
+          <div style={{ textAlign: 'right' as const }}>
+            {match.endTime && <div style={{ fontSize: 11, color: C.textDim }}>{formatDate(match.endTime)}</div>}
+            {match.duration && <div style={{ fontSize: 11, color: C.textDim }}>{formatDuration(match.duration)}</div>}
+          </div>
         </div>
       </div>
 
-      {/* Performance grid */}
+      {/* Stats — single card with KDA row + detail grid */}
       <div style={styles.card}>
-        <div style={styles.cardTitle}>Performance</div>
-        <div style={styles.statGrid}>
+        <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: 10 }}>
           <StatCell label="Kills" value={player.kills} />
           <StatCell label="Deaths" value={player.deaths} />
           <StatCell label="Assists" value={player.assists} />
           <StatCell label="KDA" value={player.kda.toFixed(2)} />
-          <StatCell label="Accuracy" value={player.accuracy !== null ? `${player.accuracy}%` : '—'} />
-          <StatCell label="Score" value={formatNumber(player.score)} />
+        </div>
+        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
+          <div style={styles.statGrid}>
+            <StatCell label="Accuracy" value={player.accuracy !== null ? `${player.accuracy}%` : '—'} />
+            <StatCell label="Score" value={formatNumber(player.score)} />
+            <StatCell label="Headshots" value={player.headshots} />
+            <StatCell label="Dmg Dealt" value={formatNumber(player.damageDealt)} />
+            <StatCell label="Dmg Taken" value={formatNumber(player.damageTaken)} />
+            <StatCell label="Max Spree" value={player.maxKillingSpree} />
+          </div>
         </div>
       </div>
 
-      {/* Detailed stats */}
-      <div style={styles.card}>
-        <div style={styles.cardTitle}>Details</div>
-        <div style={styles.statGrid}>
-          <StatCell label="Damage Dealt" value={formatNumber(player.damageDealt)} />
-          <StatCell label="Damage Taken" value={formatNumber(player.damageTaken)} />
-          <StatCell label="Headshots" value={player.headshots} />
-          <StatCell label="Melee Kills" value={player.meleeKills} />
-          <StatCell label="Grenade Kills" value={player.grenadeKills} />
-          <StatCell label="Power Weapons" value={player.powerWeaponKills} />
-          <StatCell label="Max Spree" value={player.maxKillingSpree} />
-        </div>
-      </div>
-
-      {/* Medals */}
+      {/* Medals — prominent icon grid */}
       {player.medals.length > 0 && (
         <div style={styles.card}>
           <div style={styles.cardTitle}>
-            Medals <span style={styles.cardSubtitle}>({player.medals.length})</span>
+            Medals
           </div>
           <div style={styles.medalGrid}>
-            {player.medals.map((m) => (
-              <div
-                key={String(m.nameId)}
-                style={{
-                  ...styles.medalChip,
-                  borderLeft: `3px solid ${medalDifficultyColor(m.difficulty)}`,
-                }}
-                title={m.description}
-              >
-                {spriteSheet && m.spriteIndex >= 0 ? (
-                  <MedalSprite
-                    spriteSheet={spriteSheet}
-                    spriteIndex={m.spriteIndex}
-                    displaySize={24}
-                  />
-                ) : null}
-                <span style={styles.medalName}>{m.name}</span>
-                <span style={styles.medalCount}>x{m.count}</span>
-              </div>
-            ))}
+            {player.medals.map((m) => {
+              const dc = medalDifficultyColor(m.difficulty);
+              return (
+                <div
+                  key={String(m.nameId)}
+                  style={{
+                    ...styles.medalTile,
+                    background: `radial-gradient(ellipse at center, ${dc}30 0%, ${C.bg} 70%)`,
+                    borderColor: `${dc}50`,
+                  }}
+                  title={`${m.name}: ${m.description}`}
+                >
+                  {spriteSheet && m.spriteIndex >= 0 ? (
+                    <MedalSprite
+                      spriteSheet={spriteSheet}
+                      spriteIndex={m.spriteIndex}
+                      displaySize={40}
+                    />
+                  ) : (
+                    <div style={{ width: 40, height: 40, background: C.border }} />
+                  )}
+                  {m.count > 1 && (
+                    <span style={styles.medalBadgeCount}>{m.count}</span>
+                  )}
+                  <span style={styles.medalTileLabel}>{m.name}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -432,15 +430,16 @@ function CareerImpactTab({ impact }: { impact: CareerImpact }) {
   const sameRank = !rankedUp;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {/* XP Earned card */}
       <div style={styles.card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span
             style={{
               ...styles.badge,
-              background: '#38bdf8',
-              color: '#000',
+              background: 'transparent',
+              borderColor: C.accent,
+              color: C.accent,
             }}
           >
             +{formatNumber(xpEarned)} XP
@@ -449,8 +448,9 @@ function CareerImpactTab({ impact }: { impact: CareerImpact }) {
             <span
               style={{
                 ...styles.badge,
-                background: '#fbbf24',
-                color: '#000',
+                background: 'transparent',
+                borderColor: C.gold,
+                color: C.gold,
               }}
             >
               RANK UP!
@@ -465,10 +465,10 @@ function CareerImpactTab({ impact }: { impact: CareerImpact }) {
         {sameRank ? (
           // Same rank: show before/after progress within the rank
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
               <RankBadge snap={post} />
               <div>
-                <div style={{ fontWeight: 600 }}>{rankLabel(post)}</div>
+                <div style={{ fontWeight: 700, color: C.text, letterSpacing: '0.5px' }}>{rankLabel(post)}</div>
                 <div style={styles.cardSubtitle}>Rank {post.currentRank}</div>
               </div>
             </div>
@@ -478,14 +478,14 @@ function CareerImpactTab({ impact }: { impact: CareerImpact }) {
                 <div style={{ opacity: 0.4, marginBottom: 4 }}>
                   <ProgressBar
                     progress={pre.rankProgress}
-                    color="#38bdf8"
+                    color={C.accent}
                     label={`Before: ${formatNumber(pre.partialProgress)} / ${formatNumber(pre.xpRequired)} XP`}
                   />
                 </div>
                 {/* After progress bar */}
                 <ProgressBar
                   progress={post.rankProgress}
-                  color="#38bdf8"
+                  color={C.accent}
                   label={`After: ${formatNumber(post.partialProgress)} / ${formatNumber(post.xpRequired)} XP (+${formatNumber(xpEarned)})`}
                 />
               </div>
@@ -497,19 +497,19 @@ function CareerImpactTab({ impact }: { impact: CareerImpact }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
               <div style={{ textAlign: 'center' }}>
                 <RankBadge snap={pre} dimmed />
-                <div style={{ ...styles.cardSubtitle, marginTop: 4 }}>{rankLabel(pre)}</div>
+                <div style={{ ...styles.cardSubtitle, marginTop: 4, opacity: 0.5 }}>{rankLabel(pre)}</div>
               </div>
-              <span style={{ fontSize: 20, opacity: 0.5 }}>&rarr;</span>
+              <span style={{ fontSize: 20, color: C.textDim }}>&rarr;</span>
               <div style={{ textAlign: 'center' }}>
                 <RankBadge snap={post} />
-                <div style={{ ...styles.cardSubtitle, marginTop: 4, fontWeight: 600 }}>{rankLabel(post)}</div>
+                <div style={{ ...styles.cardSubtitle, marginTop: 4, fontWeight: 700, color: C.text }}>{rankLabel(post)}</div>
               </div>
             </div>
             {!post.isHero && (
-              <div style={{ marginTop: 12 }}>
+              <div style={{ marginTop: 8 }}>
                 <ProgressBar
                   progress={post.rankProgress}
-                  color="#38bdf8"
+                  color={C.accent}
                   label={`${formatNumber(post.partialProgress)} / ${formatNumber(post.xpRequired)} XP into new rank`}
                 />
               </div>
@@ -523,7 +523,7 @@ function CareerImpactTab({ impact }: { impact: CareerImpact }) {
         <div style={styles.cardTitle}>Overall Progress</div>
         <ProgressBar
           progress={impact.overallProgressAfter}
-          color="#38bdf8"
+          color={C.accent}
           label={`${(impact.overallProgressBefore * 100).toFixed(2)}% → ${(impact.overallProgressAfter * 100).toFixed(2)}%`}
         />
       </div>
@@ -541,7 +541,7 @@ function CareerTab({ career }: { career: CareerProgression | null }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {/* Current rank */}
       <div style={styles.card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -549,7 +549,7 @@ function CareerTab({ career }: { career: CareerProgression | null }) {
             <img
               src={career.rankIconUrl}
               alt={`Rank ${career.currentRank}`}
-              style={{ width: 52, height: 52, flexShrink: 0, objectFit: 'contain' }}
+              style={{ width: 44, height: 44, flexShrink: 0, objectFit: 'contain' }}
             />
           ) : (
             <div
@@ -564,7 +564,7 @@ function CareerTab({ career }: { career: CareerProgression | null }) {
             </div>
           )}
           <div>
-            <div style={styles.cardTitle}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, letterSpacing: '0.5px', marginBottom: 4 }}>
               {career.rankTitle || `${career.tierType} ${career.rankTier}`}
             </div>
             <div style={styles.cardSubtitle}>
@@ -582,7 +582,7 @@ function CareerTab({ career }: { career: CareerProgression | null }) {
           <div style={styles.cardTitle}>Rank Progress</div>
           <ProgressBar
             progress={career.rankProgress}
-            color="#38bdf8"
+            color={C.accent}
             label={`${formatNumber(career.currentXp)} / ${formatNumber(career.xpRequired)} XP`}
           />
         </div>
@@ -595,37 +595,11 @@ function CareerTab({ career }: { career: CareerProgression | null }) {
         </div>
         <ProgressBar
           progress={career.overallProgress}
-          color={career.isHero ? '#ffd700' : '#38bdf8'}
+          color={career.isHero ? C.gold : C.accent}
           label={`${formatNumber(career.xpEarnedToDate)} / ${formatNumber(career.totalXpRequired)} XP`}
         />
         <div style={{ ...styles.meta, marginTop: 8 }}>
           <span>{Math.round(career.overallProgress * 100)}% complete</span>
-        </div>
-      </div>
-
-      {/* Rank ladder */}
-      <div style={styles.card}>
-        <div style={styles.cardTitle}>Rank Tiers</div>
-        <div style={styles.rankLadder}>
-          {career.rankLadder
-            .filter((entry) => entry.count > 0)
-            .map((entry) => (
-              <div
-                key={entry.tier}
-                style={{
-                  ...styles.ladderItem,
-                  ...(entry.isCurrent ? styles.ladderItemCurrent : {}),
-                  borderLeft: `3px solid ${tierColor(entry.tier)}`,
-                }}
-              >
-                <span style={{ fontWeight: entry.isCurrent ? 700 : 400 }}>
-                  {entry.tier}
-                </span>
-                <span style={styles.ladderCount}>
-                  {entry.count} rank{entry.count !== 1 ? 's' : ''}
-                </span>
-              </div>
-            ))}
         </div>
       </div>
 
@@ -714,14 +688,14 @@ function LoadingView() {
   return (
     <div style={styles.centered}>
       <div style={styles.spinner} />
-      <span style={{ marginTop: 12, opacity: 0.7 }}>Loading Spartan data...</span>
+      <span style={{ marginTop: 8, opacity: 0.7 }}>Loading Spartan data...</span>
     </div>
   );
 }
 
 function ErrorView({ message }: { message: string }) {
   return (
-    <div style={{ ...styles.centered, color: '#f87171' }}>
+    <div style={{ ...styles.centered, color: C.red, background: C.bg }}>
       <div style={{ fontSize: 24, marginBottom: 8 }}>!</div>
       <span>{message}</span>
     </div>
@@ -740,142 +714,163 @@ function EmptyState({ text }: { text: string }) {
 // Inline styles
 // ---------------------------------------------------------------------------
 
+// Halo Infinite color palette
+const C = {
+  bg: '#1b2028',
+  cardBg: '#232a34',
+  border: '#3a3f47',
+  text: '#e8eaed',
+  textDim: '#8b919a',
+  accent: '#38bdf8',
+  gold: '#d4a835',
+  green: '#4ade80',
+  red: '#f87171',
+  amber: '#fbbf24',
+  slate: '#94a3b8',
+};
+
 const styles: Record<string, React.CSSProperties> = {
   tabBar: {
     display: 'flex',
-    gap: 4,
-    marginBottom: 16,
-    borderBottom: '1px solid var(--color-border-primary, light-dark(#ddd, #333))',
+    gap: 0,
+    marginBottom: 10,
+    borderBottom: `1px solid ${C.border}`,
   },
   tab: {
     flex: 1,
-    padding: '10px 0',
+    padding: '8px 0',
     border: 'none',
     background: 'transparent',
-    color: 'var(--color-text-secondary, light-dark(#666, #aaa))',
-    fontSize: 14,
-    fontWeight: 500,
+    color: C.textDim,
+    fontSize: 11,
+    fontWeight: 600,
     cursor: 'pointer',
     borderBottom: '2px solid transparent',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '1.5px',
     transition: 'color 0.15s, border-color 0.15s',
   },
   tabActive: {
-    color: '#38bdf8',
-    borderBottomColor: '#38bdf8',
-    fontWeight: 600,
+    color: C.accent,
+    borderBottomColor: C.accent,
   },
   card: {
-    background: 'var(--color-background-secondary, light-dark(#fff, #161b22))',
-    borderRadius: 10,
-    padding: 16,
-    border: '1px solid var(--color-border-primary, light-dark(#e0e0e0, #30363d))',
+    background: C.cardBg,
+    borderRadius: 0,
+    padding: 12,
+    border: `1px solid ${C.border}`,
   },
   cardTitle: {
-    fontSize: 15,
+    fontSize: 11,
     fontWeight: 600,
     marginBottom: 8,
-    color: 'var(--color-text-primary, inherit)',
+    color: C.textDim,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '1.5px',
   },
   cardSubtitle: {
-    fontSize: 13,
-    color: 'var(--color-text-secondary, light-dark(#666, #8b949e))',
+    fontSize: 11,
+    color: C.textDim,
+    letterSpacing: '0.5px',
   },
   badge: {
     display: 'inline-block',
     padding: '4px 12px',
-    borderRadius: 6,
-    fontSize: 13,
+    borderRadius: 0,
+    fontSize: 10,
     fontWeight: 700,
     textTransform: 'uppercase' as const,
-    letterSpacing: '0.5px',
+    letterSpacing: '1.5px',
+    border: '1px solid',
   },
   meta: {
     display: 'flex',
-    gap: 16,
-    fontSize: 12,
-    color: 'var(--color-text-secondary, light-dark(#888, #8b949e))',
+    gap: 12,
+    fontSize: 11,
+    color: C.textDim,
+    letterSpacing: '0.5px',
   },
   statGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(3, 1fr)',
-    gap: 12,
+    gap: 4,
   },
   statCell: {
     textAlign: 'center' as const,
+    padding: '4px 0',
   },
   statValue: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: 700,
-    color: 'var(--color-text-primary, inherit)',
+    color: C.text,
+    letterSpacing: '0.5px',
   },
   statLabel: {
-    fontSize: 11,
-    color: 'var(--color-text-secondary, light-dark(#888, #8b949e))',
+    fontSize: 9,
+    color: C.textDim,
     marginTop: 2,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '1px',
   },
   medalGrid: {
-    display: 'flex',
-    flexWrap: 'wrap' as const,
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))',
     gap: 6,
   },
-  medalChip: {
+  medalTile: {
     display: 'flex',
+    flexDirection: 'column' as const,
     alignItems: 'center',
-    gap: 6,
-    padding: '4px 10px',
-    borderRadius: 6,
-    background: 'var(--color-background-primary, light-dark(#f0f0f0, #0d1117))',
-    fontSize: 12,
+    gap: 4,
+    padding: '8px 4px',
+    background: C.bg,
+    border: `1px solid ${C.border}`,
+    position: 'relative' as const,
   },
-  medalName: {
-    fontWeight: 500,
+  medalBadgeCount: {
+    position: 'absolute' as const,
+    top: 4,
+    right: 4,
+    fontSize: 10,
+    fontWeight: 700,
+    color: C.gold,
+    letterSpacing: '0.5px',
   },
-  medalCount: {
-    opacity: 0.7,
-    fontSize: 11,
+  medalTileLabel: {
+    fontSize: 9,
+    color: C.textDim,
+    textAlign: 'center' as const,
+    lineHeight: '1.2',
+    letterSpacing: '0.3px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
+    maxWidth: '100%',
   },
   rankBadge: {
-    width: 52,
-    height: 52,
-    borderRadius: 12,
+    width: 44,
+    height: 44,
+    borderRadius: 0,
+    border: `1px solid ${C.border}`,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 800,
     color: '#000',
     flexShrink: 0,
   },
   progressTrack: {
-    height: 8,
-    borderRadius: 4,
-    background: 'var(--color-background-primary, light-dark(#e0e0e0, #21262d))',
+    height: 4,
+    borderRadius: 0,
+    background: C.bg,
     overflow: 'hidden',
+    border: `1px solid ${C.border}`,
   },
   progressFill: {
     height: '100%',
-    borderRadius: 4,
+    borderRadius: 0,
     transition: 'width 0.4s ease',
-  },
-  rankLadder: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    gap: 4,
-  },
-  ladderItem: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    padding: '6px 10px',
-    borderRadius: 6,
-    fontSize: 13,
-    background: 'transparent',
-  },
-  ladderItemCurrent: {
-    background: 'var(--color-background-primary, light-dark(#f0f0f0, #0d1117))',
-  },
-  ladderCount: {
-    fontSize: 12,
-    opacity: 0.6,
   },
   centered: {
     display: 'flex',
@@ -884,12 +879,13 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     minHeight: 200,
     textAlign: 'center' as const,
+    color: C.textDim,
   },
   spinner: {
     width: 28,
     height: 28,
-    border: '3px solid var(--color-border-primary, #333)',
-    borderTopColor: '#38bdf8',
+    border: `2px solid ${C.border}`,
+    borderTopColor: C.accent,
     borderRadius: '50%',
     animation: 'spin 0.8s linear infinite',
   },

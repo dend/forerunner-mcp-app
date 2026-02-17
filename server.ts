@@ -503,19 +503,6 @@ function computeCareerProgression(
   const rankTitle = currentRankDef ? rdTitle(currentRankDef) : '';
   const rankTier = currentRankDef ? rdGrade(currentRankDef) : 0;
 
-  // Build rank ladder summary (group by tier type)
-  const tierOrder = ['Unranked', 'Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond', 'Onyx', 'Hero'];
-  const rankLadder = tierOrder.map((tier) => {
-    const ranksInTier = rankDefs.filter((rd) => {
-      return rdTierType(rd).toLowerCase() === tier.toLowerCase();
-    });
-    return {
-      tier,
-      count: ranksInTier.length,
-      isCurrent: tierType.toLowerCase() === tier.toLowerCase(),
-    };
-  });
-
   return {
     currentRank,
     isHero,
@@ -529,7 +516,6 @@ function computeCareerProgression(
     totalXpRequired,
     overallProgress: totalXpRequired > 0 ? xpEarnedToDate / totalXpRequired : 0,
     totalRanks: rankDefs.length,
-    rankLadder,
     currentRankIconPath: currentRankDef ? rdIcon(currentRankDef) : '',
   };
 }
