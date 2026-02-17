@@ -83,14 +83,11 @@ Add this to your VS Code settings JSON (`settings.json`) or workspace `.vscode/s
 
 ### Tools
 
-**`halo-authenticate`** — Authenticates with Xbox Live and Halo Infinite. On first run, it opens a browser sign-in flow. Tokens are encrypted and stored locally in `tokens.bin`, so subsequent runs reuse or refresh them automatically.
+**`halo_authenticate`** — Authenticates with Xbox Live and Halo Infinite. Opens a browser sign-in flow if needed and waits for completion. Tokens are encrypted and stored locally in `tokens.bin`, so subsequent runs reuse or refresh them automatically.
 
-**`halo-stats`** — Fetches your last match stats and career progression, displayed in a two-tab React dashboard:
+**`halo_match_stats`** — Fetches your last Halo Infinite match stats: outcome, map, mode, K/D/A, accuracy, damage, and medals.
 
-- **Last Match** — Outcome, map, mode, K/D/A, accuracy, damage, medals
-- **Career** — Current rank, XP progress, overall progress to Hero, rank tier ladder
-
-Call `halo-authenticate` first, then `halo-stats`.
+**`halo_career`** — Fetches your career rank progression: current rank, XP progress, overall progress to Hero, and rank tier ladder.
 
 ## Development
 
@@ -110,9 +107,10 @@ The server starts on `http://localhost:3001/mcp` by default (HTTP transport). Us
 Host calls tool -> Server fetches Halo data -> Returns JSON -> React UI renders dashboard
 ```
 
-1. `halo-authenticate` handles the Xbox Live OAuth flow (via `@dendotdev/conch`) and exchanges tokens up to a Halo Infinite Spartan token (via `@dendotdev/grunt`)
-2. `halo-stats` uses the authenticated client to fetch match history, match stats, career rank, rank definitions, and medal metadata in parallel
-3. The React UI receives the tool result and renders it in a two-tab dashboard
+1. `halo_authenticate` handles the Xbox Live OAuth flow (via `@dendotdev/conch`) and exchanges tokens up to a Halo Infinite Spartan token (via `@dendotdev/grunt`)
+2. `halo_match_stats` fetches match history, match stats, and medal metadata
+3. `halo_career` fetches career rank and rank definitions
+4. The React UI receives the tool result and renders the dashboard
 
 ## License
 

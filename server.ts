@@ -1,6 +1,6 @@
 /**
  * MCP Server for Halo Infinite stat tracker.
- * Registers two tools: halo-authenticate (plain) and halo-stats (app tool with UI).
+ * Registers three tools: halo-authenticate, halo_match_stats, and halo_career.
  */
 
 import {
@@ -68,7 +68,7 @@ export function createServer(): McpServer {
   // -----------------------------------------------------------------------
 
   server.tool(
-    'halo-authenticate',
+    'halo_authenticate',
     'Authenticate with Xbox Live / Halo Infinite. Opens a browser sign-in flow if needed and waits for completion.',
     {},
     async (): Promise<CallToolResult> => {
@@ -87,18 +87,18 @@ export function createServer(): McpServer {
   );
 
   // -----------------------------------------------------------------------
-  // Tool 2: halo-stats (app tool with UI)
+  // Tool 2: halo_match_stats (app tool with UI — last match)
   // -----------------------------------------------------------------------
 
   const resourceUri = 'ui://halo-stats/mcp-app.html';
 
   registerAppTool(
     server,
-    'halo-stats',
+    'halo_match_stats',
     {
-      title: 'Halo Infinite Stats',
+      title: 'Halo Match Stats',
       description:
-        'Show your last Halo Infinite match stats and career progression. Requires authentication first (use halo-authenticate).',
+        'Show your last Halo Infinite match stats including K/D/A, accuracy, damage, and medals.',
       inputSchema: {},
       _meta: { ui: { resourceUri } },
     },
@@ -126,13 +126,10 @@ export function createServer(): McpServer {
         const matchId = pick<string>(lastMatchRecord, 'MatchId', 'matchId') ?? '';
 
         // Parallel fetches
-        const [matchStatsResult, careerRankResult, careerRanksResult, medalMetaResult] =
-          await Promise.all([
-            client.stats.getMatchStats(matchId),
-            client.economy.getPlayerCareerRank([xuid], 'careerRank1'),
-            client.gameCms.getCareerRanks('careerRank1'),
-            client.gameCms.getMedalMetadata(),
-          ]);
+        const [matchStatsResult, medalMetaResult] = await Promise.all([
+          client.stats.getMatchStats(matchId),
+          client.gameCms.getMedalMetadata(),
+        ]);
 
         // --- Match stats ---
         let matchData: Record<string, unknown> | null = null;
@@ -140,35 +137,14 @@ export function createServer(): McpServer {
           matchData = matchStatsResult.result as unknown as Record<string, unknown>;
         }
 
-        // --- Career rank ---
-        let careerData: Record<string, unknown> | null = null;
-        if (isSuccess(careerRankResult) || isNotModified(careerRankResult)) {
-          careerData = careerRankResult.result as unknown as Record<string, unknown>;
-        }
-
-        // --- Rank definitions ---
-        let rankDefs: CareerRank[] = [];
-        if (isSuccess(careerRanksResult) || isNotModified(careerRanksResult)) {
-          const container = careerRanksResult.result as unknown as Record<string, unknown>;
-          rankDefs = (pick<CareerRank[]>(container, 'Ranks', 'ranks') ?? []);
-        }
-
         // --- Medal metadata + sprite sheet ---
         let medalDefs: Medal[] = [];
         let spriteSheet: { dataUrl: string; columns: number; size: number } | null = null;
-        console.error(`[halo-stats] Medal metadata response code: ${medalMetaResult.response.code}`);
         if (isSuccess(medalMetaResult) || isNotModified(medalMetaResult)) {
           const meta = medalMetaResult.result as unknown as Record<string, unknown>;
-          console.error('[halo-stats] Medal metadata keys:', Object.keys(meta));
           medalDefs = (pick<Medal[]>(meta, 'Medals', 'medals') ?? []);
-          console.error(`[halo-stats] Medal definitions loaded: ${medalDefs.length}`);
-          if (medalDefs.length > 0) {
-            const sample = medalDefs[0] as unknown as Record<string, unknown>;
-            console.error('[halo-stats] Sample medal def keys:', Object.keys(sample));
-            console.error('[halo-stats] Sample medal def nameId:', sample.NameId ?? sample.nameId);
-          }
 
-          // Extract sprite sheet info (API uses lowercase keys)
+          // Extract sprite sheet info
           const sprites = pick<Record<string, unknown>>(meta, 'Sprites', 'sprites');
           const small = sprites
             ? pick<Record<string, unknown>>(sprites, 'Small', 'small')
@@ -177,11 +153,9 @@ export function createServer(): McpServer {
           const spriteColumns = small ? pick<number>(small, 'Columns', 'columns') ?? 16 : 16;
           const spriteSize = small ? pick<number>(small, 'Size', 'size') ?? 72 : 72;
 
-          console.error(`[halo-stats] Sprite sheet path: ${spritePath ?? 'NOT FOUND'}`);
           if (spritePath) {
             try {
               const spriteResult = await client.gameCms.getGenericWaypointFile(spritePath);
-              console.error(`[halo-stats] Sprite sheet fetch code: ${spriteResult.response.code}`);
               if (isSuccess(spriteResult) && spriteResult.result) {
                 const b64 = Buffer.from(spriteResult.result).toString('base64');
                 spriteSheet = {
@@ -194,12 +168,6 @@ export function createServer(): McpServer {
               // Sprite sheet download failed — medals will render without images
             }
           }
-        }
-
-        // --- Compute career progression ---
-        let careerProgression: Record<string, unknown> | null = null;
-        if (careerData && rankDefs.length > 0) {
-          careerProgression = computeCareerProgression(careerData, rankDefs);
         }
 
         // --- Extract player stats from match ---
@@ -224,7 +192,7 @@ export function createServer(): McpServer {
             const endTime = pick<string>(matchInfo, 'EndTime', 'endTime');
             const duration = pick<string>(matchInfo, 'Duration', 'duration');
 
-            // Match stats only has asset references — resolve names via UGC Discovery
+            // Resolve asset names via UGC Discovery
             const mapAssetId = mapVariantRef ? pick<string>(mapVariantRef, 'AssetId', 'assetId') : undefined;
             const mapVersionId = mapVariantRef ? pick<string>(mapVariantRef, 'VersionId', 'versionId') : undefined;
             const modeAssetId = gameVariantRef ? pick<string>(gameVariantRef, 'AssetId', 'assetId') : undefined;
@@ -327,7 +295,7 @@ export function createServer(): McpServer {
         const payload = {
           match: matchMeta,
           player: playerStats ? { ...playerStats, medals: enrichedMedals } : null,
-          career: careerProgression,
+          career: null,
           spriteSheet,
         };
 
@@ -339,7 +307,70 @@ export function createServer(): McpServer {
           content: [
             {
               type: 'text',
-              text: `Error fetching stats: ${err instanceof Error ? err.message : String(err)}`,
+              text: `Error fetching match stats: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // Tool 3: halo_career (app tool with UI — career rank progression)
+  // -----------------------------------------------------------------------
+
+  registerAppTool(
+    server,
+    'halo_career',
+    {
+      title: 'Halo Career Rank',
+      description:
+        'Show your Halo Infinite career rank progression including current rank, XP, and progress to Hero.',
+      inputSchema: {},
+      _meta: { ui: { resourceUri } },
+    },
+    async (): Promise<CallToolResult> => {
+      try {
+        const { client, xuid } = await getOrCreateClient();
+
+        const [careerRankResult, careerRanksResult] = await Promise.all([
+          client.economy.getPlayerCareerRank([xuid], 'careerRank1'),
+          client.gameCms.getCareerRanks('careerRank1'),
+        ]);
+
+        let careerData: Record<string, unknown> | null = null;
+        if (isSuccess(careerRankResult) || isNotModified(careerRankResult)) {
+          careerData = careerRankResult.result as unknown as Record<string, unknown>;
+        }
+
+        let rankDefs: CareerRank[] = [];
+        if (isSuccess(careerRanksResult) || isNotModified(careerRanksResult)) {
+          const container = careerRanksResult.result as unknown as Record<string, unknown>;
+          rankDefs = (pick<CareerRank[]>(container, 'Ranks', 'ranks') ?? []);
+        }
+
+        let careerProgression: Record<string, unknown> | null = null;
+        if (careerData && rankDefs.length > 0) {
+          careerProgression = computeCareerProgression(careerData, rankDefs);
+        }
+
+        const payload = {
+          match: null,
+          player: null,
+          career: careerProgression,
+          spriteSheet: null,
+        };
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
+        };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error fetching career rank: ${err instanceof Error ? err.message : String(err)}`,
             },
           ],
           isError: true,
