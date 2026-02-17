@@ -53,6 +53,30 @@ function resolveString(val: unknown): string {
   return '';
 }
 
+/** Fetch a CMS image via gameCms.getImage() and return it as a data:image/png;base64 URL. */
+async function fetchIconAsDataUrl(
+  client: { gameCms: { getImage: (path: string) => Promise<unknown> } },
+  iconPath: string,
+): Promise<string | null> {
+  if (!iconPath) return null;
+  // Known CMS bug: incorrect path for one rank icon
+  let fixedPath = iconPath;
+  if (fixedPath === 'career_rank/CelebrationMoment/219_Cadet_Onyx_III.png') {
+    fixedPath = 'career_rank/CelebrationMoment/19_Cadet_Onyx_III.png';
+  }
+  try {
+    const result = await client.gameCms.getImage(fixedPath) as {
+      response?: { code?: number };
+      result?: Uint8Array;
+    };
+    if (isSuccess(result as never) && result?.result) {
+      const b64 = Buffer.from(result.result).toString('base64');
+      return `data:image/png;base64,${b64}`;
+    }
+  } catch { /* icon fetch failed — will fall back to gradient badge */ }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Server factory
 // ---------------------------------------------------------------------------
@@ -335,7 +359,7 @@ export function createServer(): McpServer {
         const { client, xuid } = await getOrCreateClient();
 
         const [careerRankResult, careerRanksResult] = await Promise.all([
-          client.economy.getPlayerCareerRank([xuid], 'careerRank1'),
+          client.economy.getPlayerCareerRank(xuid, 'careerRank1'),
           client.gameCms.getCareerRanks('careerRank1'),
         ]);
 
@@ -353,6 +377,10 @@ export function createServer(): McpServer {
         let careerProgression: Record<string, unknown> | null = null;
         if (careerData && rankDefs.length > 0) {
           careerProgression = computeCareerProgression(careerData, rankDefs);
+
+          // Fetch current rank icon
+          const currentIconPath = careerProgression.currentRankIconPath as string;
+          careerProgression.rankIconUrl = await fetchIconAsDataUrl(client, currentIconPath);
         }
 
         const payload = {
@@ -407,20 +435,11 @@ function computeCareerProgression(
   careerData: Record<string, unknown>,
   rankDefs: CareerRank[],
 ): Record<string, unknown> {
-  // The API returns: { RewardTracks: [{ Result: { CurrentProgress: { Rank, PartialProgress } } }] }
-  // (grunt passes raw JSON through with no field transformation — PascalCase)
+  // The API returns: { CurrentProgress: { Rank, PartialProgress, HasReachedMaxRank } }
   let rawRank = 0;
   let partialProgress = 0;
 
-  const rewardTracks =
-    pick<Record<string, unknown>[]>(careerData, 'RewardTracks', 'rewardTracks') ?? [];
-  const firstTrack = rewardTracks[0] as Record<string, unknown> | undefined;
-  const trackResult = firstTrack
-    ? pick<Record<string, unknown>>(firstTrack, 'Result', 'result')
-    : undefined;
-  const currentProgress = trackResult
-    ? pick<Record<string, unknown>>(trackResult, 'CurrentProgress', 'currentProgress')
-    : undefined;
+  const currentProgress = pick<Record<string, unknown>>(careerData, 'CurrentProgress', 'currentProgress');
   if (currentProgress) {
     rawRank = pick<number>(currentProgress, 'Rank', 'rank') ?? 0;
     partialProgress = pick<number>(currentProgress, 'PartialProgress', 'partialProgress') ?? 0;
@@ -447,6 +466,10 @@ function computeCareerProgression(
   const rdTierType = (rd: CareerRank) => {
     const o = rd as unknown as Record<string, unknown>;
     return pick<string>(o, 'TierType', 'tierType') ?? '';
+  };
+  const rdIcon = (rd: CareerRank) => {
+    const o = rd as unknown as Record<string, unknown>;
+    return pick<string>(o, 'LargeIconPath', 'RankLargeIcon', 'SmallIconPath', 'RankSmallIcon') ?? '';
   };
   const rdGrade = (rd: CareerRank) => {
     const o = rd as unknown as Record<string, unknown>;
@@ -507,6 +530,7 @@ function computeCareerProgression(
     overallProgress: totalXpRequired > 0 ? xpEarnedToDate / totalXpRequired : 0,
     totalRanks: rankDefs.length,
     rankLadder,
+    currentRankIconPath: currentRankDef ? rdIcon(currentRankDef) : '',
   };
 }
 

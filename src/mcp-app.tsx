@@ -76,12 +76,35 @@ interface CareerProgression {
   overallProgress: number;
   totalRanks: number;
   rankLadder: RankLadderEntry[];
+  rankIconUrl: string | null;
+}
+
+interface RankSnapshot {
+  currentRank: number;
+  isHero: boolean;
+  tierType: string;
+  rankTitle: string;
+  rankTier: number;
+  partialProgress: number;
+  xpRequired: number;
+  rankProgress: number;
+}
+
+interface CareerImpact {
+  pre: RankSnapshot;
+  post: RankSnapshot;
+  xpEarned: number;
+  rankedUp: boolean;
+  overallProgressBefore: number;
+  overallProgressAfter: number;
+  totalXpRequired: number;
 }
 
 interface StatsPayload {
   match: MatchMeta | null;
   player: PlayerStats | null;
   career: CareerProgression | null;
+  careerImpact: CareerImpact | null;
   spriteSheet: SpriteSheetInfo | null;
 }
 
@@ -219,10 +242,17 @@ interface DashboardProps {
 }
 
 function Dashboard({ toolResult, hostContext }: DashboardProps) {
-  const [tab, setTab] = useState<'match' | 'career'>('match');
-
   const data = toolResult ? parsePayload(toolResult) : null;
   const isError = toolResult?.isError;
+
+  // Build list of available tabs based on data
+  const tabs: Array<{ id: string; label: string }> = [];
+  if (data?.match || data?.player) tabs.push({ id: 'match', label: 'Last Match' });
+  if (data?.careerImpact) tabs.push({ id: 'careerImpact', label: 'Career Impact' });
+  if (data?.career) tabs.push({ id: 'career', label: 'Career' });
+
+  const [tab, setTab] = useState<string>('');
+  const activeTab = tabs.find((t) => t.id === tab) ? tab : tabs[0]?.id ?? '';
 
   if (isError) {
     const msg = toolResult?.content?.find((c) => c.type === 'text');
@@ -243,31 +273,31 @@ function Dashboard({ toolResult, hostContext }: DashboardProps) {
         padding: '16px',
       }}
     >
-      {/* Tab bar */}
-      <div style={styles.tabBar}>
-        <button
-          style={{
-            ...styles.tab,
-            ...(tab === 'match' ? styles.tabActive : {}),
-          }}
-          onClick={() => setTab('match')}
-        >
-          Last Match
-        </button>
-        <button
-          style={{
-            ...styles.tab,
-            ...(tab === 'career' ? styles.tabActive : {}),
-          }}
-          onClick={() => setTab('career')}
-        >
-          Career
-        </button>
-      </div>
+      {/* Tab bar — only show if more than one tab */}
+      {tabs.length > 1 && (
+        <div style={styles.tabBar}>
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              style={{
+                ...styles.tab,
+                ...(activeTab === t.id ? styles.tabActive : {}),
+              }}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
 
-      {tab === 'match' ? (
+      {activeTab === 'match' && (
         <MatchTab match={data.match} player={data.player} spriteSheet={data.spriteSheet} />
-      ) : (
+      )}
+      {activeTab === 'careerImpact' && data.careerImpact && (
+        <CareerImpactTab impact={data.careerImpact} />
+      )}
+      {activeTab === 'career' && (
         <CareerTab career={data.career} />
       )}
     </main>
@@ -373,6 +403,135 @@ function MatchTab({ match, player, spriteSheet }: { match: MatchMeta | null; pla
 }
 
 // ---------------------------------------------------------------------------
+// Career Impact Tab
+// ---------------------------------------------------------------------------
+
+function rankLabel(snap: RankSnapshot): string {
+  if (snap.isHero) return 'Hero';
+  return `${snap.tierType} ${snap.rankTitle} ${snap.rankTier}`;
+}
+
+function RankBadge({ snap, dimmed }: { snap: RankSnapshot; dimmed?: boolean }) {
+  return (
+    <div
+      style={{
+        ...styles.rankBadge,
+        background: snap.isHero
+          ? 'linear-gradient(135deg, #ffd700, #ff8c00)'
+          : `linear-gradient(135deg, ${tierColor(snap.tierType)}, ${tierColor(snap.tierType)}88)`,
+        opacity: dimmed ? 0.5 : 1,
+      }}
+    >
+      {snap.currentRank}
+    </div>
+  );
+}
+
+function CareerImpactTab({ impact }: { impact: CareerImpact }) {
+  const { pre, post, xpEarned, rankedUp } = impact;
+  const sameRank = !rankedUp;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* XP Earned card */}
+      <div style={styles.card}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span
+            style={{
+              ...styles.badge,
+              background: '#38bdf8',
+              color: '#000',
+            }}
+          >
+            +{formatNumber(xpEarned)} XP
+          </span>
+          {rankedUp && (
+            <span
+              style={{
+                ...styles.badge,
+                background: '#fbbf24',
+                color: '#000',
+              }}
+            >
+              RANK UP!
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Rank comparison card */}
+      <div style={styles.card}>
+        <div style={styles.cardTitle}>Rank Progress</div>
+        {sameRank ? (
+          // Same rank: show before/after progress within the rank
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <RankBadge snap={post} />
+              <div>
+                <div style={{ fontWeight: 600 }}>{rankLabel(post)}</div>
+                <div style={styles.cardSubtitle}>Rank {post.currentRank}</div>
+              </div>
+            </div>
+            {!post.isHero && (
+              <div>
+                {/* Before progress bar (dimmed) */}
+                <div style={{ opacity: 0.4, marginBottom: 4 }}>
+                  <ProgressBar
+                    progress={pre.rankProgress}
+                    color="#38bdf8"
+                    label={`Before: ${formatNumber(pre.partialProgress)} / ${formatNumber(pre.xpRequired)} XP`}
+                  />
+                </div>
+                {/* After progress bar */}
+                <ProgressBar
+                  progress={post.rankProgress}
+                  color="#38bdf8"
+                  label={`After: ${formatNumber(post.partialProgress)} / ${formatNumber(post.xpRequired)} XP (+${formatNumber(xpEarned)})`}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          // Rank up: show pre → post
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ textAlign: 'center' }}>
+                <RankBadge snap={pre} dimmed />
+                <div style={{ ...styles.cardSubtitle, marginTop: 4 }}>{rankLabel(pre)}</div>
+              </div>
+              <span style={{ fontSize: 20, opacity: 0.5 }}>&rarr;</span>
+              <div style={{ textAlign: 'center' }}>
+                <RankBadge snap={post} />
+                <div style={{ ...styles.cardSubtitle, marginTop: 4, fontWeight: 600 }}>{rankLabel(post)}</div>
+              </div>
+            </div>
+            {!post.isHero && (
+              <div style={{ marginTop: 12 }}>
+                <ProgressBar
+                  progress={post.rankProgress}
+                  color="#38bdf8"
+                  label={`${formatNumber(post.partialProgress)} / ${formatNumber(post.xpRequired)} XP into new rank`}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Overall progress card */}
+      <div style={styles.card}>
+        <div style={styles.cardTitle}>Overall Progress</div>
+        <ProgressBar
+          progress={impact.overallProgressAfter}
+          color="#38bdf8"
+          label={`${(impact.overallProgressBefore * 100).toFixed(2)}% → ${(impact.overallProgressAfter * 100).toFixed(2)}%`}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Career Tab
 // ---------------------------------------------------------------------------
 
@@ -386,16 +545,24 @@ function CareerTab({ career }: { career: CareerProgression | null }) {
       {/* Current rank */}
       <div style={styles.card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div
-            style={{
-              ...styles.rankBadge,
-              background: career.isHero
-                ? 'linear-gradient(135deg, #ffd700, #ff8c00)'
-                : `linear-gradient(135deg, ${tierColor(career.tierType)}, ${tierColor(career.tierType)}88)`,
-            }}
-          >
-            {career.currentRank}
-          </div>
+          {career.rankIconUrl ? (
+            <img
+              src={career.rankIconUrl}
+              alt={`Rank ${career.currentRank}`}
+              style={{ width: 52, height: 52, flexShrink: 0, objectFit: 'contain' }}
+            />
+          ) : (
+            <div
+              style={{
+                ...styles.rankBadge,
+                background: career.isHero
+                  ? 'linear-gradient(135deg, #ffd700, #ff8c00)'
+                  : `linear-gradient(135deg, ${tierColor(career.tierType)}, ${tierColor(career.tierType)}88)`,
+              }}
+            >
+              {career.currentRank}
+            </div>
+          )}
           <div>
             <div style={styles.cardTitle}>
               {career.rankTitle || `${career.tierType} ${career.rankTier}`}

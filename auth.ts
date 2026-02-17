@@ -304,13 +304,13 @@ export async function getOrCreateClient(
 
   // Fetch clearance/flight token
   log('Fetching clearance token...');
-  const clearanceResult = await client.settings.getClearanceLevel();
-  if (isSuccess(clearanceResult) && clearanceResult.result.flightId) {
-    log(`Flight ID: ${clearanceResult.result.flightId}`);
+  const clearanceResult = await client.settings.getActiveClearance('1.13');
+  if (isSuccess(clearanceResult) && clearanceResult.result.FlightConfigurationId) {
+    log(`Flight ID: ${clearanceResult.result.FlightConfigurationId}`);
     client = new HaloInfiniteClient({
       spartanToken: tokens.spartanToken,
       xuid: tokens.xuid,
-      clearanceToken: clearanceResult.result.flightId,
+      clearanceToken: clearanceResult.result.FlightConfigurationId,
     });
   } else {
     log('Could not fetch clearance token, some features may not work.');
