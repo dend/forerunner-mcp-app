@@ -1,6 +1,6 @@
 /**
  * MCP Server for Halo Infinite stat tracker.
- * Registers three tools: halo-authenticate, halo_match_stats, and halo_career.
+ * Registers tools: halo_authenticate, halo_match_stats, halo_career, and halo_service_record.
  */
 
 import {
@@ -15,14 +15,17 @@ import type {
 } from '@modelcontextprotocol/sdk/types.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { z } from 'zod';
 import {
   MatchType,
+  LifecycleMode,
   isSuccess,
   isNotModified,
 } from '@dendotdev/grunt';
 import type {
   CareerRank,
   Medal,
+  PlayerServiceRecord,
 } from '@dendotdev/grunt';
 import { getOrCreateClient } from './auth.js';
 
@@ -43,6 +46,14 @@ function pick<T>(obj: Record<string, unknown>, ...keys: string[]): T | undefined
   return undefined;
 }
 
+/** Parse an ISO 8601 duration (e.g. "PT1H23M45S", "P3DT4H") to total seconds. */
+function parseDuration(iso?: string): number {
+  if (!iso) return 0;
+  const m = iso.match(/P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/);
+  if (!m) return 0;
+  return (Number(m[1] || 0) * 86400) + (Number(m[2] || 0) * 3600) + (Number(m[3] || 0) * 60) + Number(m[4] || 0);
+}
+
 /** Resolve a DisplayString (object with .value/.Value) or plain string. */
 function resolveString(val: unknown): string {
   if (typeof val === 'string') return val;
@@ -51,6 +62,26 @@ function resolveString(val: unknown): string {
     return (obj.value ?? obj.Value ?? '') as string;
   }
   return '';
+}
+
+/** Resolve a gamertag to an XUID via the Xbox People Hub search API. */
+async function resolveGamertagToXuid(gamertag: string, xblToken: string): Promise<string> {
+  const url = `https://peoplehub.xboxlive.com/users/me/people/search/decoration/detail,preferredColor?q=${encodeURIComponent(gamertag)}&maxItems=25`;
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': xblToken,
+      'x-xbl-contract-version': '3',
+      'Content-Type': 'application/json',
+      'Accept-Language': 'en-us',
+    },
+  });
+  if (!res.ok) throw new Error(`People Hub search failed (${res.status})`);
+  const data = await res.json() as { people?: Array<{ xuid?: string; gamertag?: string }> };
+  const match = data.people?.find(
+    (p) => p.gamertag?.toLowerCase() === gamertag.toLowerCase(),
+  ) ?? data.people?.[0];
+  if (!match?.xuid) throw new Error(`Could not resolve gamertag "${gamertag}" to an XUID`);
+  return match.xuid;
 }
 
 /** Fetch a CMS image via gameCms.getImage() and return it as a data:image/png;base64 URL. */
@@ -400,6 +431,87 @@ export function createServer(): McpServer {
               type: 'text',
               text: `Error fetching career rank: ${err instanceof Error ? err.message : String(err)}`,
             },
+          ],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // Tool 4: halo_service_record (regular tool — aggregate multiplayer stats)
+  // -----------------------------------------------------------------------
+
+  server.tool(
+    'halo_service_record',
+    'Get a Halo Infinite multiplayer service record (lifetime matchmade stats). Defaults to the authenticated player; specify a gamertag to look up another player.',
+    {
+      gamertag: z.string().optional().describe('Xbox gamertag to look up. Omit to get your own service record.'),
+    },
+    async ({ gamertag }): Promise<CallToolResult> => {
+      try {
+        const { client, xuid, xblToken } = await getOrCreateClient();
+
+        let targetXuid = xuid;
+        let targetLabel = 'your';
+        if (gamertag) {
+          if (!xblToken) throw new Error('XBL token unavailable — re-authenticate to look up other players.');
+          targetXuid = await resolveGamertagToXuid(gamertag, xblToken);
+          targetLabel = gamertag;
+        }
+
+        const result = await client.stats.getPlayerServiceRecordByXuid(
+          targetXuid,
+          LifecycleMode.Matchmade,
+        );
+        if (!isSuccess(result) && !isNotModified(result)) {
+          return {
+            content: [{ type: 'text', text: `Failed to fetch service record (${result.response.code}).` }],
+            isError: true,
+          };
+        }
+
+        const sr = result.result as PlayerServiceRecord;
+        const core = sr.CoreStats;
+        const matchesPlayed = sr.MatchesCompleted ?? 0;
+
+        const wins = sr.Wins ?? 0;
+        const losses = sr.Losses ?? 0;
+        const ties = sr.Ties ?? 0;
+
+        const kills = core?.Kills ?? 0;
+        const deaths = core?.Deaths ?? 0;
+        const assists = core?.Assists ?? 0;
+        const kda = core?.AverageKDA ?? core?.KDA ?? 0;
+
+        const shotsFired = core?.ShotsFired ?? 0;
+        const shotsHit = core?.ShotsHit ?? 0;
+        const accuracy = shotsFired > 0 ? Math.round((shotsHit / shotsFired) * 1000) / 10 : 0;
+
+        const damageDealt = core?.DamageDealt ?? 0;
+        const damageTaken = core?.DamageTaken ?? 0;
+
+        const timeSeconds = parseDuration(sr.TimePlayed);
+        const hours = Math.floor(timeSeconds / 3600);
+        const minutes = Math.floor((timeSeconds % 3600) / 60);
+
+        const winRate = matchesPlayed > 0 ? Math.round((wins / matchesPlayed) * 1000) / 10 : 0;
+
+        const summary = [
+          `Service record for ${targetLabel} (matchmade):`,
+          ``,
+          `Matches: ${matchesPlayed}  |  W ${wins} / L ${losses} / T ${ties}  |  Win rate: ${winRate}%`,
+          `K/D/A: ${kills} / ${deaths} / ${assists}  |  KDA: ${kda.toFixed(2)}`,
+          `Accuracy: ${accuracy}% (${shotsHit}/${shotsFired})`,
+          `Damage dealt: ${damageDealt.toLocaleString()}  |  Damage taken: ${damageTaken.toLocaleString()}`,
+          `Time played: ${hours}h ${minutes}m`,
+        ].join('\n');
+
+        return { content: [{ type: 'text', text: summary }] };
+      } catch (err) {
+        return {
+          content: [
+            { type: 'text', text: `Error fetching service record: ${err instanceof Error ? err.message : String(err)}` },
           ],
           isError: true,
         };

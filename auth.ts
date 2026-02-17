@@ -11,7 +11,12 @@ import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { scryptSync, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import { hostname, userInfo, platform } from 'node:os';
-import { XboxAuthenticationClient } from '@dendotdev/conch';
+import {
+  XboxAuthenticationClient,
+  hasAccessToken,
+  hasToken,
+  getUserHash,
+} from '@dendotdev/conch';
 import {
   HaloAuthenticationClient,
   HaloInfiniteClient,
@@ -38,6 +43,7 @@ export interface StoredTokens {
 export interface AuthenticatedClient {
   client: HaloInfiniteClient;
   xuid: string;
+  xblToken: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,9 +151,12 @@ export function waitForAuthCode(redirectUri: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 function openBrowser(url: string): void {
+  const quoted = JSON.stringify(url);
   const cmd =
-    platform() === 'darwin' ? 'open' : platform() === 'win32' ? 'start' : 'xdg-open';
-  exec(`${cmd} ${JSON.stringify(url)}`);
+    platform() === 'darwin' ? `open ${quoted}`
+    : platform() === 'win32' ? `start "" ${quoted}`
+    : `xdg-open ${quoted}`;
+  exec(cmd);
 }
 
 // ---------------------------------------------------------------------------
@@ -167,26 +176,26 @@ async function authenticate(
   const code = await waitForAuthCode(config.redirectUri);
 
   const oauthToken = await xboxClient.requestOAuthToken(config.clientId, code, config.redirectUri);
-  if (!oauthToken?.access_token) throw new Error('Failed to get OAuth access token');
+  if (!oauthToken || !hasAccessToken(oauthToken)) throw new Error('Failed to get OAuth access token');
 
   const userToken = await xboxClient.requestUserToken(oauthToken.access_token);
-  if (!userToken?.Token) throw new Error('Failed to get user token');
+  if (!hasToken(userToken)) throw new Error('Failed to get user token');
 
   const xboxXstsToken = await xboxClient.requestXstsToken(userToken.Token);
-  if (!xboxXstsToken?.Token) throw new Error('Failed to get Xbox XSTS token');
+  if (!hasToken(xboxXstsToken)) throw new Error('Failed to get Xbox XSTS token');
 
   const xuid = xboxXstsToken.DisplayClaims?.xui?.[0]?.xid;
-  const userHash = xboxXstsToken.DisplayClaims?.xui?.[0]?.uhs;
+  const userHash = getUserHash(xboxXstsToken);
   if (!xuid || !userHash) throw new Error('Failed to get XUID/userHash from Xbox XSTS token');
 
-  const xblToken = `XBL3.0 x=${userHash};${xboxXstsToken.Token}`;
+  const xblToken = xboxClient.getXboxLiveV3Token(userHash, xboxXstsToken.Token);
 
   const relyingParty = HaloAuthenticationClient.getRelyingParty();
   const haloXstsToken = await xboxClient.requestXstsToken(
     userToken.Token,
     relyingParty as 'http://xboxlive.com',
   );
-  if (!haloXstsToken?.Token) throw new Error('Failed to get Halo XSTS token');
+  if (!hasToken(haloXstsToken)) throw new Error('Failed to get Halo XSTS token');
 
   const haloAuthClient = new HaloAuthenticationClient();
   const spartanTokenResponse = await haloAuthClient.getSpartanToken(haloXstsToken.Token);
@@ -206,26 +215,26 @@ async function refreshAuthentication(
     refreshToken,
     config.redirectUri,
   );
-  if (!oauthToken?.access_token) throw new Error('Failed to refresh OAuth token');
+  if (!oauthToken || !hasAccessToken(oauthToken)) throw new Error('Failed to refresh OAuth token');
 
   const userToken = await xboxClient.requestUserToken(oauthToken.access_token);
-  if (!userToken?.Token) throw new Error('Failed to get user token');
+  if (!hasToken(userToken)) throw new Error('Failed to get user token');
 
   const xboxXstsToken = await xboxClient.requestXstsToken(userToken.Token);
-  if (!xboxXstsToken?.Token) throw new Error('Failed to get Xbox XSTS token');
+  if (!hasToken(xboxXstsToken)) throw new Error('Failed to get Xbox XSTS token');
 
   const xuid = xboxXstsToken.DisplayClaims?.xui?.[0]?.xid;
-  const userHash = xboxXstsToken.DisplayClaims?.xui?.[0]?.uhs;
+  const userHash = getUserHash(xboxXstsToken);
   if (!xuid || !userHash) throw new Error('Failed to get XUID/userHash from Xbox XSTS token');
 
-  const xblToken = `XBL3.0 x=${userHash};${xboxXstsToken.Token}`;
+  const xblToken = xboxClient.getXboxLiveV3Token(userHash, xboxXstsToken.Token);
 
   const relyingParty = HaloAuthenticationClient.getRelyingParty();
   const haloXstsToken = await xboxClient.requestXstsToken(
     userToken.Token,
     relyingParty as 'http://xboxlive.com',
   );
-  if (!haloXstsToken?.Token) throw new Error('Failed to get Halo XSTS token');
+  if (!hasToken(haloXstsToken)) throw new Error('Failed to get Halo XSTS token');
 
   const haloAuthClient = new HaloAuthenticationClient();
   const spartanTokenResponse = await haloAuthClient.getSpartanToken(haloXstsToken.Token);
@@ -316,7 +325,7 @@ export async function getOrCreateClient(
     log('Could not fetch clearance token, some features may not work.');
   }
 
-  cachedClient = { client, xuid: tokens.xuid };
+  cachedClient = { client, xuid: tokens.xuid, xblToken: tokens.xblToken ?? '' };
   cachedExpiry = tokens.spartanTokenExpiry;
   return cachedClient;
 }
