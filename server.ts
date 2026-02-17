@@ -24,14 +24,7 @@ import type {
   CareerRank,
   Medal,
 } from '@dendotdev/grunt';
-import {
-  getOrCreateClient,
-  hasValidTokens,
-  trySilentAuth,
-  startInteractiveAuth,
-  isAuthPending,
-  waitForPendingAuth,
-} from './auth.js';
+import { getOrCreateClient } from './auth.js';
 
 // Works both from source (server.ts) and compiled (dist/server.js)
 const DIST_DIR = import.meta.filename.endsWith('.ts')
@@ -76,43 +69,12 @@ export function createServer(): McpServer {
 
   server.tool(
     'halo-authenticate',
-    'Authenticate with Xbox Live / Halo Infinite. Opens a browser sign-in flow if needed.',
+    'Authenticate with Xbox Live / Halo Infinite. Opens a browser sign-in flow if needed and waits for completion.',
     {},
     async (): Promise<CallToolResult> => {
       try {
-        // 1. Already authenticated?
-        if (await hasValidTokens()) {
-          return { content: [{ type: 'text', text: 'Already authenticated with Halo Infinite.' }] };
-        }
-
-        // 2. Callback server already waiting — remind user
-        if (isAuthPending()) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Authentication is already in progress. Complete the sign-in in your browser, then call this tool again to confirm.',
-              },
-            ],
-          };
-        }
-
-        // 3. Try silent refresh (no browser needed)
-        const silent = await trySilentAuth();
-        if (silent.authenticated) {
-          return { content: [{ type: 'text', text: 'Successfully authenticated with Halo Infinite (token refreshed).' }] };
-        }
-
-        // 4. Need interactive auth — return URL immediately
-        const { authUrl } = startInteractiveAuth();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Open this URL in your browser to sign in:\n\n${authUrl}\n\nAfter signing in, call halo-authenticate again to confirm.`,
-            },
-          ],
-        };
+        await getOrCreateClient((msg) => console.error(`[auth] ${msg}`));
+        return { content: [{ type: 'text', text: 'Successfully authenticated with Halo Infinite.' }] };
       } catch (err) {
         return {
           content: [
@@ -142,23 +104,6 @@ export function createServer(): McpServer {
     },
     async (): Promise<CallToolResult> => {
       try {
-        // If interactive auth is in progress, wait for it to finish
-        if (isAuthPending()) {
-          await waitForPendingAuth();
-        }
-
-        if (!(await hasValidTokens())) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Not authenticated. Please run the halo-authenticate tool first.',
-              },
-            ],
-            isError: true,
-          };
-        }
-
         const { client, xuid } = await getOrCreateClient();
 
         // Fetch match history (last 1 match)

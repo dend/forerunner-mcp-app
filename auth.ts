@@ -4,12 +4,13 @@
  * same OAuth → Xbox → Spartan token chain.
  */
 
+import { exec } from 'node:child_process';
 import { createServer } from 'node:http';
 import { URL } from 'node:url';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
 import { scryptSync, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
-import { hostname, userInfo } from 'node:os';
+import { hostname, userInfo, platform } from 'node:os';
 import { XboxAuthenticationClient } from '@dendotdev/conch';
 import {
   HaloAuthenticationClient,
@@ -140,6 +141,16 @@ export function waitForAuthCode(redirectUri: string): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Browser helper
+// ---------------------------------------------------------------------------
+
+function openBrowser(url: string): void {
+  const cmd =
+    platform() === 'darwin' ? 'open' : platform() === 'win32' ? 'start' : 'xdg-open';
+  exec(`${cmd} ${JSON.stringify(url)}`);
+}
+
+// ---------------------------------------------------------------------------
 // Full OAuth → Xbox → Spartan token chain
 // ---------------------------------------------------------------------------
 
@@ -149,8 +160,9 @@ async function authenticate(
   const xboxClient = new XboxAuthenticationClient();
 
   const authUrl = xboxClient.generateAuthUrl(config.clientId, config.redirectUri);
-  console.error('[auth] Open this URL to sign in:');
+  console.error('[auth] Opening browser for sign-in...');
   console.error(authUrl);
+  openBrowser(authUrl);
 
   const code = await waitForAuthCode(config.redirectUri);
 
@@ -225,17 +237,6 @@ async function refreshAuthentication(
     refreshToken: oauthToken.refresh_token ?? refreshToken,
     xblToken,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Public: check whether we have valid stored tokens
-// ---------------------------------------------------------------------------
-
-export async function hasValidTokens(): Promise<boolean> {
-  const tokens = await loadTokens();
-  if (!tokens?.spartanToken || !tokens.refreshToken) return false;
-  // Consider valid if not within 5 min of expiry
-  return !!(tokens.spartanTokenExpiry && Date.now() < tokens.spartanTokenExpiry - 300_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -320,105 +321,4 @@ export async function getOrCreateClient(
   return cachedClient;
 }
 
-// ---------------------------------------------------------------------------
-// Public: attempt silent auth (refresh or existing tokens, no browser needed)
-// ---------------------------------------------------------------------------
 
-export async function trySilentAuth(): Promise<{ authenticated: boolean }> {
-  if (await hasValidTokens()) {
-    return { authenticated: true };
-  }
-
-  const config = loadConfig();
-  const tokens = await loadTokens();
-
-  if (tokens?.refreshToken) {
-    try {
-      const refreshed = await refreshAuthentication(config, tokens.refreshToken);
-      await saveTokens({
-        refreshToken: refreshed.refreshToken,
-        spartanToken: refreshed.spartanToken,
-        spartanTokenExpiry: Date.now() + 3_600_000,
-        xuid: refreshed.xuid,
-        xblToken: refreshed.xblToken,
-      });
-      cachedClient = null;
-      cachedExpiry = 0;
-      return { authenticated: true };
-    } catch {
-      // Refresh failed — need interactive auth
-    }
-  }
-
-  return { authenticated: false };
-}
-
-// ---------------------------------------------------------------------------
-// Public: start interactive auth (returns URL immediately, completes in background)
-// ---------------------------------------------------------------------------
-
-let pendingAuth: Promise<void> | null = null;
-
-export function startInteractiveAuth(): { authUrl: string } {
-  const config = loadConfig();
-  const xboxClient = new XboxAuthenticationClient();
-  const authUrl = xboxClient.generateAuthUrl(config.clientId, config.redirectUri);
-
-  // Run the callback server + token exchange in the background
-  pendingAuth = (async () => {
-    try {
-      const code = await waitForAuthCode(config.redirectUri);
-
-      const oauthToken = await xboxClient.requestOAuthToken(config.clientId, code, config.redirectUri);
-      if (!oauthToken?.access_token) throw new Error('Failed to get OAuth access token');
-
-      const userToken = await xboxClient.requestUserToken(oauthToken.access_token);
-      if (!userToken?.Token) throw new Error('Failed to get user token');
-
-      const xboxXstsToken = await xboxClient.requestXstsToken(userToken.Token);
-      if (!xboxXstsToken?.Token) throw new Error('Failed to get Xbox XSTS token');
-
-      const xuid = xboxXstsToken.DisplayClaims?.xui?.[0]?.xid;
-      const userHash = xboxXstsToken.DisplayClaims?.xui?.[0]?.uhs;
-      if (!xuid || !userHash) throw new Error('Failed to get XUID/userHash');
-
-      const xblToken = `XBL3.0 x=${userHash};${xboxXstsToken.Token}`;
-
-      const relyingParty = HaloAuthenticationClient.getRelyingParty();
-      const haloXstsToken = await xboxClient.requestXstsToken(
-        userToken.Token,
-        relyingParty as 'http://xboxlive.com',
-      );
-      if (!haloXstsToken?.Token) throw new Error('Failed to get Halo XSTS token');
-
-      const haloAuthClient = new HaloAuthenticationClient();
-      const spartanTokenResponse = await haloAuthClient.getSpartanToken(haloXstsToken.Token);
-      if (!spartanTokenResponse?.token) throw new Error('Failed to get Spartan token');
-
-      await saveTokens({
-        refreshToken: oauthToken.refresh_token ?? '',
-        spartanToken: spartanTokenResponse.token,
-        spartanTokenExpiry: Date.now() + 3_600_000,
-        xuid,
-        xblToken,
-      });
-
-      cachedClient = null;
-      cachedExpiry = 0;
-    } finally {
-      pendingAuth = null;
-    }
-  })();
-
-  return { authUrl };
-}
-
-/** Whether an interactive auth callback server is currently waiting. */
-export function isAuthPending(): boolean {
-  return pendingAuth !== null;
-}
-
-/** Wait for the pending interactive auth to complete. */
-export async function waitForPendingAuth(): Promise<void> {
-  if (pendingAuth) await pendingAuth;
-}

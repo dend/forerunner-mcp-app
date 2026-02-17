@@ -63,6 +63,24 @@ Add this to your Claude Desktop MCP server configuration:
 }
 ```
 
+## Usage with VS Code
+
+Add this to your VS Code settings JSON (`settings.json`) or workspace `.vscode/settings.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "halo-stats": {
+        "command": "npx",
+        "args": ["tsx", "main.ts", "--stdio"],
+        "cwd": "/path/to/forerunner-mcp-app"
+      }
+    }
+  }
+}
+```
+
 ### Tools
 
 **`halo-authenticate`** — Authenticates with Xbox Live and Halo Infinite. On first run, it opens a browser sign-in flow. Tokens are encrypted and stored locally in `tokens.bin`, so subsequent runs reuse or refresh them automatically.
