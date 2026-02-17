@@ -39,3 +39,7 @@ venv/
 coverage/
 .nyc_output/
 *.lcov
+
+# App secrets
+config.json
+tokens.bin
