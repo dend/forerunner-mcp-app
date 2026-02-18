@@ -24,9 +24,28 @@ import {
 } from '@dendotdev/grunt';
 import type {
   CareerRank,
+  CoreStats,
+  MatchHistoryResponse,
+  MatchStats,
   Medal,
+  MedalMetadata,
   PlayerServiceRecord,
+  RewardTrack,
 } from '@dendotdev/grunt';
+
+/**
+ * The grunt type defines HeadshotKills but the Halo API returns Headshots.
+ * Extend CoreStats to match the actual API response.
+ */
+type ApiCoreStats = CoreStats & { Headshots?: number };
+
+/**
+ * MedalMetadata.SpriteSheet doesn't match the actual API structure.
+ * The API nests sprite info under Sprites.Small.
+ */
+type ApiMedalMetadata = MedalMetadata & {
+  Sprites?: { Small?: { Path?: string; Columns?: number; Size?: number } };
+};
 import { getOrCreateClient } from './auth.js';
 
 // Works both from source (server.ts) and compiled (dist/server.js)
@@ -38,30 +57,12 @@ const DIST_DIR = import.meta.filename.endsWith('.ts')
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Safely access a property with inconsistent casing from the Halo API. */
-function pick<T>(obj: Record<string, unknown>, ...keys: string[]): T | undefined {
-  for (const k of keys) {
-    if (obj[k] !== undefined) return obj[k] as T;
-  }
-  return undefined;
-}
-
 /** Parse an ISO 8601 duration (e.g. "PT1H23M45S", "P3DT4H") to total seconds. */
 function parseDuration(iso?: string): number {
   if (!iso) return 0;
   const m = iso.match(/P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?/);
   if (!m) return 0;
   return (Number(m[1] || 0) * 86400) + (Number(m[2] || 0) * 3600) + (Number(m[3] || 0) * 60) + Number(m[4] || 0);
-}
-
-/** Resolve a DisplayString (object with .value/.Value) or plain string. */
-function resolveString(val: unknown): string {
-  if (typeof val === 'string') return val;
-  if (val && typeof val === 'object') {
-    const obj = val as Record<string, unknown>;
-    return (obj.value ?? obj.Value ?? '') as string;
-  }
-  return '';
 }
 
 /** Resolve a gamertag to an XUID via the Xbox People Hub search API. */
@@ -170,15 +171,15 @@ export function createServer(): McpServer {
           };
         }
 
-        const historyObj = historyResult.result as Record<string, unknown>;
-        const results = (pick<unknown[]>(historyObj, 'Results', 'results') ?? []) as Record<string, unknown>[];
+        const history = historyResult.result as MatchHistoryResponse;
+        const results = history?.Results ?? [];
 
         if (results.length === 0) {
           return { content: [{ type: 'text', text: 'No matches found.' }], isError: true };
         }
 
         const lastMatchRecord = results[0];
-        const matchId = pick<string>(lastMatchRecord, 'MatchId', 'matchId') ?? '';
+        const matchId = lastMatchRecord.MatchId ?? '';
 
         // Parallel fetches
         const [matchStatsResult, medalMetaResult] = await Promise.all([
@@ -187,26 +188,23 @@ export function createServer(): McpServer {
         ]);
 
         // --- Match stats ---
-        let matchData: Record<string, unknown> | null = null;
+        let matchData: MatchStats | null = null;
         if (isSuccess(matchStatsResult) || isNotModified(matchStatsResult)) {
-          matchData = matchStatsResult.result as unknown as Record<string, unknown>;
+          matchData = matchStatsResult.result as MatchStats;
         }
 
         // --- Medal metadata + sprite sheet ---
         let medalDefs: Medal[] = [];
         let spriteSheet: { dataUrl: string; columns: number; size: number } | null = null;
         if (isSuccess(medalMetaResult) || isNotModified(medalMetaResult)) {
-          const meta = medalMetaResult.result as unknown as Record<string, unknown>;
-          medalDefs = (pick<Medal[]>(meta, 'Medals', 'medals') ?? []);
+          const meta = medalMetaResult.result as ApiMedalMetadata;
+          medalDefs = meta?.Medals ?? [];
 
-          // Extract sprite sheet info
-          const sprites = pick<Record<string, unknown>>(meta, 'Sprites', 'sprites');
-          const small = sprites
-            ? pick<Record<string, unknown>>(sprites, 'Small', 'small')
-            : undefined;
-          const spritePath = small ? pick<string>(small, 'Path', 'path') : undefined;
-          const spriteColumns = small ? pick<number>(small, 'Columns', 'columns') ?? 16 : 16;
-          const spriteSize = small ? pick<number>(small, 'Size', 'size') ?? 72 : 72;
+          // Extract sprite sheet info (API nests under Sprites.Small, not SpriteSheet)
+          const small = meta?.Sprites?.Small;
+          const spritePath = small?.Path;
+          const spriteColumns = small?.Columns ?? 16;
+          const spriteSize = small?.Size ?? 72;
 
           if (spritePath) {
             try {
@@ -229,55 +227,39 @@ export function createServer(): McpServer {
         let playerStats: Record<string, unknown> | null = null;
         let matchMeta: Record<string, unknown> | null = null;
         if (matchData) {
-          const matchInfo = pick<Record<string, unknown>>(matchData, 'MatchInfo', 'matchInfo');
-          const players = pick<Record<string, unknown>[]>(matchData, 'Players', 'players') ?? [];
+          const matchInfo = matchData.MatchInfo;
+          const players = matchData.Players ?? [];
 
           // Find our player — PlayerId is "xuid(12345)" format string
           const xuidWrapped = `xuid(${xuid})`;
-          const me = players.find((p) => {
-            const playerId = pick<string>(p, 'PlayerId', 'playerId');
-            return playerId === xuidWrapped || playerId === xuid;
-          });
+          const me = players.find((p) => p.PlayerId === xuidWrapped || p.PlayerId === xuid);
 
           if (matchInfo) {
-            const mapVariantRef = pick<Record<string, unknown>>(matchInfo, 'MapVariant', 'mapVariant');
-            const gameVariantRef = pick<Record<string, unknown>>(matchInfo, 'UgcGameVariant', 'ugcGameVariant');
-            const playlistRef = pick<Record<string, unknown>>(matchInfo, 'Playlist', 'playlist');
-            const startTime = pick<string>(matchInfo, 'StartTime', 'startTime');
-            const endTime = pick<string>(matchInfo, 'EndTime', 'endTime');
-            const duration = pick<string>(matchInfo, 'Duration', 'duration');
+            const mapVariantRef = matchInfo.MapVariant;
+            const gameVariantRef = matchInfo.UgcGameVariant;
+            const playlistRef = matchInfo.Playlist;
 
             // Resolve asset names via UGC Discovery
-            const mapAssetId = mapVariantRef ? pick<string>(mapVariantRef, 'AssetId', 'assetId') : undefined;
-            const mapVersionId = mapVariantRef ? pick<string>(mapVariantRef, 'VersionId', 'versionId') : undefined;
-            const modeAssetId = gameVariantRef ? pick<string>(gameVariantRef, 'AssetId', 'assetId') : undefined;
-            const modeVersionId = gameVariantRef ? pick<string>(gameVariantRef, 'VersionId', 'versionId') : undefined;
-            const playlistAssetId = playlistRef ? pick<string>(playlistRef, 'AssetId', 'assetId') : undefined;
-
             const assetName = async (
               fetcher: () => Promise<unknown>,
               fallback: string,
             ): Promise<string> => {
               try {
-                const res = await fetcher() as { result?: Record<string, unknown> } | null;
-                if (res?.result) {
-                  return pick<string>(res.result, 'PublicName', 'publicName')
-                    ?? pick<string>(res.result, 'Name', 'name')
-                    ?? fallback;
-                }
+                const res = await fetcher() as { result?: { PublicName?: string } } | null;
+                if (res?.result) return res.result.PublicName ?? fallback;
               } catch { /* Discovery call failed — use fallback */ }
               return fallback;
             };
 
             const [mapName, modeName, playlistName] = await Promise.all([
-              mapAssetId && mapVersionId
-                ? assetName(() => client.ugcDiscovery.getMap(mapAssetId, mapVersionId), 'Unknown Map')
+              mapVariantRef?.AssetId && mapVariantRef?.VersionId
+                ? assetName(() => client.ugcDiscovery.getMap(mapVariantRef.AssetId!, mapVariantRef.VersionId!), 'Unknown Map')
                 : Promise.resolve('Unknown Map'),
-              modeAssetId && modeVersionId
-                ? assetName(() => client.ugcDiscovery.getUgcGameVariant(modeAssetId, modeVersionId), 'Unknown Mode')
+              gameVariantRef?.AssetId && gameVariantRef?.VersionId
+                ? assetName(() => client.ugcDiscovery.getUgcGameVariant(gameVariantRef.AssetId!, gameVariantRef.VersionId!), 'Unknown Mode')
                 : Promise.resolve('Unknown Mode'),
-              playlistAssetId
-                ? assetName(() => client.ugcDiscovery.getPlaylistWithoutVersion(playlistAssetId), '')
+              playlistRef?.AssetId
+                ? assetName(() => client.ugcDiscovery.getPlaylistWithoutVersion(playlistRef.AssetId!), '')
                 : Promise.resolve(''),
             ]);
 
@@ -286,55 +268,36 @@ export function createServer(): McpServer {
               mapName,
               modeName,
               playlistName,
-              startTime: startTime ?? '',
-              endTime: endTime ?? '',
-              duration: duration ?? '',
+              startTime: matchInfo.StartTime ?? '',
+              endTime: matchInfo.EndTime ?? '',
+              duration: matchInfo.Duration ?? '',
             };
           }
 
           if (me) {
-            const outcome = pick<string>(me, 'Outcome', 'outcome') ??
-                            pick<number>(me, 'Outcome', 'outcome')?.toString() ??
-                            'Unknown';
-            const playerTeamStats = pick<Record<string, unknown>[]>(me, 'PlayerTeamStats', 'playerTeamStats') ?? [];
-            const firstTeam = playerTeamStats[0];
-            const stats = firstTeam
-              ? pick<Record<string, unknown>>(firstTeam, 'Stats', 'stats')
-              : undefined;
+            const core = me.PlayerTeamStats?.[0]?.Stats?.CoreStats as ApiCoreStats | undefined;
 
-            if (stats) {
-              const coreStats = pick<Record<string, unknown>>(stats, 'CoreStats', 'coreStats');
-              const medals = coreStats
-                ? pick<Record<string, unknown>[]>(coreStats, 'Medals', 'medals') ?? []
-                : [];
-
+            if (core) {
               playerStats = {
-                outcome: String(outcome),
-                kills: pick<number>(coreStats ?? {}, 'Kills', 'kills') ?? 0,
-                deaths: pick<number>(coreStats ?? {}, 'Deaths', 'deaths') ?? 0,
-                assists: pick<number>(coreStats ?? {}, 'Assists', 'assists') ?? 0,
-                kda: pick<number>(coreStats ?? {}, 'KDA', 'kda') ?? 0,
-                score: pick<number>(coreStats ?? {}, 'Score', 'score') ??
-                       pick<number>(coreStats ?? {}, 'PersonalScore', 'personalScore') ?? 0,
-                accuracy: pick<number>(coreStats ?? {}, 'ShotsHit', 'shotsHit') !== undefined &&
-                          pick<number>(coreStats ?? {}, 'ShotsFired', 'shotsFired') !== undefined
-                  ? Math.round(
-                      ((pick<number>(coreStats!, 'ShotsHit', 'shotsHit')! /
-                        Math.max(pick<number>(coreStats!, 'ShotsFired', 'shotsFired')!, 1)) *
-                        100) *
-                        10,
-                    ) / 10
+                outcome: String(me.Outcome ?? 'Unknown'),
+                kills: core.Kills ?? 0,
+                deaths: core.Deaths ?? 0,
+                assists: core.Assists ?? 0,
+                kda: core.KDA ?? 0,
+                score: core.Score ?? core.PersonalScore ?? 0,
+                accuracy: core.ShotsHit != null && core.ShotsFired != null
+                  ? Math.round(((core.ShotsHit / Math.max(core.ShotsFired, 1)) * 100) * 10) / 10
                   : null,
-                damageDealt: pick<number>(coreStats ?? {}, 'DamageDealt', 'damageDealt') ?? 0,
-                damageTaken: pick<number>(coreStats ?? {}, 'DamageTaken', 'damageTaken') ?? 0,
-                headshots: pick<number>(coreStats ?? {}, 'Headshots', 'headshots') ?? 0,
-                meleeKills: pick<number>(coreStats ?? {}, 'MeleeKills', 'meleeKills') ?? 0,
-                grenadeKills: pick<number>(coreStats ?? {}, 'GrenadeKills', 'grenadeKills') ?? 0,
-                powerWeaponKills: pick<number>(coreStats ?? {}, 'PowerWeaponKills', 'powerWeaponKills') ?? 0,
-                maxKillingSpree: pick<number>(coreStats ?? {}, 'MaxKillingSpree', 'maxKillingSpree') ?? 0,
-                medals: medals.map((m) => ({
-                  nameId: pick<number>(m, 'NameId', 'nameId') ?? pick<string>(m, 'NameId', 'nameId') ?? 0,
-                  count: pick<number>(m, 'Count', 'count') ?? 0,
+                damageDealt: core.DamageDealt ?? 0,
+                damageTaken: core.DamageTaken ?? 0,
+                headshots: core.Headshots ?? core.HeadshotKills ?? 0,
+                meleeKills: core.MeleeKills ?? 0,
+                grenadeKills: core.GrenadeKills ?? 0,
+                powerWeaponKills: core.PowerWeaponKills ?? 0,
+                maxKillingSpree: core.MaxKillingSpree ?? 0,
+                medals: (core.Medals ?? []).map((m) => ({
+                  nameId: m.NameId ?? 0,
+                  count: m.Count ?? 0,
                 })),
               };
             }
@@ -381,37 +344,46 @@ export function createServer(): McpServer {
     {
       title: 'Halo Career Rank',
       description:
-        'Show your Halo Infinite career rank progression including current rank, XP, and progress to Hero.',
-      inputSchema: {},
+        'Show Halo Infinite career rank progression including current rank, XP, and progress to Hero. Defaults to the authenticated player; specify a gamertag to look up another player.',
+      inputSchema: {
+        gamertag: z.string().optional().describe('Xbox gamertag to look up. Omit to get your own career rank.'),
+      },
       _meta: { ui: { resourceUri } },
     },
-    async (): Promise<CallToolResult> => {
+    async ({ gamertag }): Promise<CallToolResult> => {
       try {
-        const { client, xuid } = await getOrCreateClient();
+        const { client, xuid, xblToken } = await getOrCreateClient();
+
+        let targetXuid = xuid;
+        if (gamertag) {
+          if (!xblToken) throw new Error('XBL token unavailable — re-authenticate to look up other players.');
+          targetXuid = await resolveGamertagToXuid(gamertag, xblToken);
+        }
 
         const [careerRankResult, careerRanksResult] = await Promise.all([
-          client.economy.getPlayerCareerRank(xuid, 'careerRank1'),
+          client.economy.getPlayerCareerRank([targetXuid], 'careerRank1'),
           client.gameCms.getCareerRanks('careerRank1'),
         ]);
 
-        let careerData: Record<string, unknown> | null = null;
+        let rewardTrack: RewardTrack | null = null;
         if (isSuccess(careerRankResult) || isNotModified(careerRankResult)) {
-          careerData = careerRankResult.result as unknown as Record<string, unknown>;
+          rewardTrack = careerRankResult.result?.RewardTracks?.[0]?.Result ?? null;
         }
 
         let rankDefs: CareerRank[] = [];
         if (isSuccess(careerRanksResult) || isNotModified(careerRanksResult)) {
-          const container = careerRanksResult.result as unknown as Record<string, unknown>;
-          rankDefs = (pick<CareerRank[]>(container, 'Ranks', 'ranks') ?? []);
+          rankDefs = careerRanksResult.result?.Ranks ?? [];
         }
 
-        let careerProgression: Record<string, unknown> | null = null;
-        if (careerData && rankDefs.length > 0) {
-          careerProgression = computeCareerProgression(careerData, rankDefs);
-
-          // Fetch current rank icon
-          const currentIconPath = careerProgression.currentRankIconPath as string;
-          careerProgression.rankIconUrl = await fetchIconAsDataUrl(client, currentIconPath);
+        let careerProgression: ReturnType<typeof computeCareerProgression> | null = null;
+        if (rewardTrack && rankDefs.length > 0) {
+          careerProgression = computeCareerProgression(rewardTrack, rankDefs);
+          const [currentIcon, nextIcon] = await Promise.all([
+            fetchIconAsDataUrl(client, careerProgression.currentRankIconPath),
+            careerProgression.nextRank ? fetchIconAsDataUrl(client, careerProgression.nextRank.iconPath) : null,
+          ]);
+          careerProgression.rankIconUrl = currentIcon;
+          if (careerProgression.nextRank) careerProgression.nextRank.iconUrl = nextIcon;
         }
 
         const payload = {
@@ -439,41 +411,50 @@ export function createServer(): McpServer {
   );
 
   // -----------------------------------------------------------------------
-  // Tool 4: halo_service_record (regular tool — aggregate multiplayer stats)
+  // Tool 4: halo_service_record (app tool with UI — aggregate multiplayer stats)
   // -----------------------------------------------------------------------
 
-  server.tool(
+  registerAppTool(
+    server,
     'halo_service_record',
-    'Get a Halo Infinite multiplayer service record (lifetime matchmade stats). Defaults to the authenticated player; specify a gamertag to look up another player.',
     {
-      gamertag: z.string().optional().describe('Xbox gamertag to look up. Omit to get your own service record.'),
+      title: 'Halo Service Record',
+      description:
+        'Show a Halo Infinite multiplayer service record (lifetime matchmade stats) with career rank. Defaults to the authenticated player; specify a gamertag to look up another player.',
+      inputSchema: {
+        gamertag: z.string().optional().describe('Xbox gamertag to look up. Omit to get your own service record.'),
+      },
+      _meta: { ui: { resourceUri } },
     },
     async ({ gamertag }): Promise<CallToolResult> => {
       try {
         const { client, xuid, xblToken } = await getOrCreateClient();
 
         let targetXuid = xuid;
-        let targetLabel = 'your';
+        let resolvedGamertag: string | null = null;
         if (gamertag) {
           if (!xblToken) throw new Error('XBL token unavailable — re-authenticate to look up other players.');
           targetXuid = await resolveGamertagToXuid(gamertag, xblToken);
-          targetLabel = gamertag;
+          resolvedGamertag = gamertag;
         }
 
-        const result = await client.stats.getPlayerServiceRecordByXuid(
-          targetXuid,
-          LifecycleMode.Matchmade,
-        );
-        if (!isSuccess(result) && !isNotModified(result)) {
+        // Parallel fetch: service record + career data
+        const [srResult, careerRankResult, careerRanksResult] = await Promise.all([
+          client.stats.getPlayerServiceRecordByXuid(targetXuid, LifecycleMode.Matchmade),
+          client.economy.getPlayerCareerRank([targetXuid], 'careerRank1').catch(() => null),
+          client.gameCms.getCareerRanks('careerRank1').catch(() => null),
+        ]);
+
+        if (!isSuccess(srResult) && !isNotModified(srResult)) {
           return {
-            content: [{ type: 'text', text: `Failed to fetch service record (${result.response.code}).` }],
+            content: [{ type: 'text', text: `Failed to fetch service record (${srResult.response.code}).` }],
             isError: true,
           };
         }
 
-        const sr = result.result as PlayerServiceRecord;
-        const core = sr.CoreStats;
-        const matchesPlayed = sr.MatchesCompleted ?? 0;
+        const sr = srResult.result as PlayerServiceRecord;
+        const core = sr.CoreStats as ApiCoreStats | undefined;
+        const matchesCompleted = sr.MatchesCompleted ?? 0;
 
         const wins = sr.Wins ?? 0;
         const losses = sr.Losses ?? 0;
@@ -490,24 +471,81 @@ export function createServer(): McpServer {
 
         const damageDealt = core?.DamageDealt ?? 0;
         const damageTaken = core?.DamageTaken ?? 0;
+        const headshots = core?.Headshots ?? core?.HeadshotKills ?? 0;
+        const meleeKills = core?.MeleeKills ?? 0;
+        const grenadeKills = core?.GrenadeKills ?? 0;
+        const powerWeaponKills = core?.PowerWeaponKills ?? 0;
+        const maxKillingSpree = core?.MaxKillingSpree ?? 0;
+        const suicides = core?.Suicides ?? 0;
+        const betrayals = core?.Betrayals ?? 0;
+        const vehicleDestroys = core?.VehicleDestroys ?? 0;
 
-        const timeSeconds = parseDuration(sr.TimePlayed);
-        const hours = Math.floor(timeSeconds / 3600);
-        const minutes = Math.floor((timeSeconds % 3600) / 60);
+        const timePlayed = sr.TimePlayed ?? '';
+        const timePlayedSeconds = parseDuration(timePlayed);
+        const winRate = matchesCompleted > 0 ? Math.round((wins / matchesCompleted) * 1000) / 10 : 0;
 
-        const winRate = matchesPlayed > 0 ? Math.round((wins / matchesPlayed) * 1000) / 10 : 0;
+        // Career progression (non-fatal)
+        let careerProgression: ReturnType<typeof computeCareerProgression> | null = null;
+        if (careerRankResult && careerRanksResult) {
+          try {
+            let rewardTrack: RewardTrack | null = null;
+            if (isSuccess(careerRankResult) || isNotModified(careerRankResult)) {
+              rewardTrack = careerRankResult.result?.RewardTracks?.[0]?.Result ?? null;
+            }
+            let rankDefs: CareerRank[] = [];
+            if (isSuccess(careerRanksResult) || isNotModified(careerRanksResult)) {
+              rankDefs = careerRanksResult.result?.Ranks ?? [];
+            }
+            if (rewardTrack && rankDefs.length > 0) {
+              careerProgression = computeCareerProgression(rewardTrack, rankDefs);
+              const [currentIcon, nextIcon] = await Promise.all([
+                fetchIconAsDataUrl(client, careerProgression.currentRankIconPath),
+                careerProgression.nextRank ? fetchIconAsDataUrl(client, careerProgression.nextRank.iconPath) : null,
+              ]);
+              careerProgression.rankIconUrl = currentIcon;
+              if (careerProgression.nextRank) careerProgression.nextRank.iconUrl = nextIcon;
+            }
+          } catch { /* career processing failed — non-fatal */ }
+        }
 
-        const summary = [
-          `Service record for ${targetLabel} (matchmade):`,
-          ``,
-          `Matches: ${matchesPlayed}  |  W ${wins} / L ${losses} / T ${ties}  |  Win rate: ${winRate}%`,
-          `K/D/A: ${kills} / ${deaths} / ${assists}  |  KDA: ${kda.toFixed(2)}`,
-          `Accuracy: ${accuracy}% (${shotsHit}/${shotsFired})`,
-          `Damage dealt: ${damageDealt.toLocaleString()}  |  Damage taken: ${damageTaken.toLocaleString()}`,
-          `Time played: ${hours}h ${minutes}m`,
-        ].join('\n');
+        const payload = {
+          match: null,
+          player: null,
+          career: careerProgression,
+          careerImpact: null,
+          spriteSheet: null,
+          serviceRecord: {
+            gamertag: resolvedGamertag,
+            matchesCompleted,
+            wins,
+            losses,
+            ties,
+            winRate,
+            kills,
+            deaths,
+            assists,
+            kda,
+            accuracy,
+            shotsFired,
+            shotsHit,
+            damageDealt,
+            damageTaken,
+            headshots,
+            meleeKills,
+            grenadeKills,
+            powerWeaponKills,
+            maxKillingSpree,
+            suicides,
+            betrayals,
+            vehicleDestroys,
+            timePlayed,
+            timePlayedSeconds,
+          },
+        };
 
-        return { content: [{ type: 'text', text: summary }] };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
+        };
       } catch (err) {
         return {
           content: [
@@ -544,83 +582,37 @@ export function createServer(): McpServer {
 // ---------------------------------------------------------------------------
 
 function computeCareerProgression(
-  careerData: Record<string, unknown>,
+  rewardTrack: RewardTrack,
   rankDefs: CareerRank[],
-): Record<string, unknown> {
-  // The API returns: { CurrentProgress: { Rank, PartialProgress, HasReachedMaxRank } }
-  let rawRank = 0;
-  let partialProgress = 0;
-
-  const currentProgress = pick<Record<string, unknown>>(careerData, 'CurrentProgress', 'currentProgress');
-  if (currentProgress) {
-    rawRank = pick<number>(currentProgress, 'Rank', 'rank') ?? 0;
-    partialProgress = pick<number>(currentProgress, 'PartialProgress', 'partialProgress') ?? 0;
-  }
+) {
+  const rawRank = rewardTrack.CurrentProgress?.Rank ?? 0;
+  const partialProgress = rewardTrack.CurrentProgress?.PartialProgress ?? 0;
 
   // Hero rank = 272 (0-indexed in API, but rank definitions use 1-based)
   const isHero = rawRank === 272;
   const currentRank = isHero ? 272 : rawRank + 1;
 
-  // Helper to read rank def fields (handles both PascalCase API and camelCase grunt model)
-  const rdRank = (rd: CareerRank) => {
-    const o = rd as unknown as Record<string, unknown>;
-    return pick<number>(o, 'Rank', 'rank') ?? 0;
-  };
-  const rdXp = (rd: CareerRank) => {
-    const o = rd as unknown as Record<string, unknown>;
-    return pick<number>(o, 'XpRequiredForRank', 'xpRequiredForRank', 'XpRequired', 'xpRequired') ?? 0;
-  };
-  const rdTitle = (rd: CareerRank) => {
-    const o = rd as unknown as Record<string, unknown>;
-    const raw = pick<unknown>(o, 'RankTitle', 'rankTitle', 'Title', 'title');
-    return resolveString(raw);
-  };
-  const rdTierType = (rd: CareerRank) => {
-    const o = rd as unknown as Record<string, unknown>;
-    return pick<string>(o, 'TierType', 'tierType') ?? '';
-  };
-  const rdIcon = (rd: CareerRank) => {
-    const o = rd as unknown as Record<string, unknown>;
-    return pick<string>(o, 'LargeIconPath', 'RankLargeIcon', 'SmallIconPath', 'RankSmallIcon') ?? '';
-  };
-  const rdGrade = (rd: CareerRank) => {
-    const o = rd as unknown as Record<string, unknown>;
-    // RankTier may be a {Value: N} object or a plain number
-    const raw = pick<unknown>(o, 'RankTier', 'rankTier', 'Grade', 'grade', 'Tier', 'tier');
-    if (typeof raw === 'number') return raw;
-    if (raw && typeof raw === 'object') {
-      const v = (raw as Record<string, unknown>).Value ?? (raw as Record<string, unknown>).value;
-      return typeof v === 'number' ? v : 0;
-    }
-    return 0;
-  };
+  const currentRankDef = rankDefs.find((r) => r.Rank === currentRank);
+  const nextRankDef = isHero ? null : rankDefs.find((r) => r.Rank === currentRank + 1) ?? null;
 
-  // Find current rank definition
-  const currentRankDef = rankDefs.find((r) => rdRank(r) === currentRank);
-
-  const xpRequired = currentRankDef ? rdXp(currentRankDef) : 0;
+  const xpRequired = currentRankDef?.XpRequiredForRank ?? 0;
 
   // XP earned to date: sum all ranks below current + partial progress
   let xpEarnedToDate = partialProgress;
   for (const rd of rankDefs) {
-    if (rdRank(rd) < currentRank) xpEarnedToDate += rdXp(rd);
+    if ((rd.Rank ?? 0) < currentRank) xpEarnedToDate += rd.XpRequiredForRank ?? 0;
   }
 
   // Total XP across all ranks
   let totalXpRequired = 0;
-  for (const rd of rankDefs) totalXpRequired += rdXp(rd);
-
-  // Rank tier info
-  const tierType = currentRankDef ? rdTierType(currentRankDef) : '';
-  const rankTitle = currentRankDef ? rdTitle(currentRankDef) : '';
-  const rankTier = currentRankDef ? rdGrade(currentRankDef) : 0;
+  for (const rd of rankDefs) totalXpRequired += rd.XpRequiredForRank ?? 0;
 
   return {
     currentRank,
     isHero,
-    tierType,
-    rankTitle,
-    rankTier,
+    tierType: currentRankDef?.TierType ?? '',
+    rankTitle: currentRankDef?.RankTitle?.Value ?? '',
+    rankTier: currentRankDef?.RankGrade ?? 0,
     currentXp: partialProgress,
     xpRequired,
     rankProgress: xpRequired > 0 ? partialProgress / xpRequired : isHero ? 1 : 0,
@@ -628,7 +620,17 @@ function computeCareerProgression(
     totalXpRequired,
     overallProgress: totalXpRequired > 0 ? xpEarnedToDate / totalXpRequired : 0,
     totalRanks: rankDefs.length,
-    currentRankIconPath: currentRankDef ? rdIcon(currentRankDef) : '',
+    currentRankIconPath: currentRankDef?.RankLargeIcon ?? '',
+    rankIconUrl: null as string | null,
+    nextRank: nextRankDef ? {
+      rank: nextRankDef.Rank ?? currentRank + 1,
+      tierType: nextRankDef.TierType ?? '',
+      rankTitle: nextRankDef.RankTitle?.Value ?? '',
+      rankTier: nextRankDef.RankGrade ?? 0,
+      xpRequired: nextRankDef.XpRequiredForRank ?? 0,
+      iconPath: nextRankDef.RankLargeIcon ?? '',
+      iconUrl: null as string | null,
+    } : null,
   };
 }
 
@@ -640,44 +642,18 @@ function enrichMedals(
   earned: Array<{ nameId: number | string; count: number }>,
   medalDefs: Medal[],
 ): Array<Record<string, unknown>> {
-  console.error(`[enrichMedals] Enriching ${earned.length} medals against ${medalDefs.length} definitions`);
-  if (earned.length > 0) {
-    console.error(`[enrichMedals] First earned medal nameId: ${earned[0].nameId} (type: ${typeof earned[0].nameId})`);
-  }
   return earned
     .map((m) => {
-      const def = medalDefs.find((d) => {
-        const dObj = d as unknown as Record<string, unknown>;
-        const id = pick<number | string>(dObj, 'NameId', 'nameId');
-        return id !== undefined && String(id) === String(m.nameId);
-      });
-      const dObj = def ? (def as unknown as Record<string, unknown>) : null;
-      // Medal name/description may be a DisplayString object ({value: "..."}) or a plain string
-      const rawName = dObj ? pick<unknown>(dObj, 'Name', 'name') : null;
-      const rawDesc = dObj ? pick<unknown>(dObj, 'Description', 'description') : null;
-      // Difficulty/type may be string labels or numeric indices
-      const rawDiff = dObj ? pick<unknown>(dObj, 'DifficultyIndex', 'difficultyIndex', 'Difficulty', 'difficulty') : null;
-      const rawType = dObj ? pick<unknown>(dObj, 'TypeIndex', 'typeIndex', 'Type', 'type') : null;
-      const rawSpriteIndex = dObj ? pick<number>(dObj, 'SpriteIndex', 'spriteIndex') : undefined;
+      const def = medalDefs.find((d) => d.NameId != null && String(d.NameId) === String(m.nameId));
       return {
         nameId: m.nameId,
         count: m.count,
-        name: resolveString(rawName) || `Medal ${m.nameId}`,
-        description: resolveString(rawDesc),
-        difficulty: typeof rawDiff === 'number' ? rawDiff : difficultyStringToIndex(String(rawDiff ?? '')),
-        type: typeof rawType === 'number' ? rawType : 0,
-        spriteIndex: rawSpriteIndex ?? -1,
+        name: def?.Name?.Value || `Medal ${m.nameId}`,
+        description: def?.Description?.Value ?? '',
+        difficulty: def?.DifficultyIndex ?? 0,
+        type: def?.TypeIndex ?? 0,
+        spriteIndex: def?.SpriteIndex ?? -1,
       };
     })
     .sort((a, b) => b.count - a.count);
-}
-
-function difficultyStringToIndex(s: string): number {
-  switch (s.toLowerCase()) {
-    case 'normal': return 0;
-    case 'heroic': return 1;
-    case 'legendary': return 2;
-    case 'mythic': return 3;
-    default: return 0;
-  }
 }

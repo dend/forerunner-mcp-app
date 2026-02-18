@@ -1,6 +1,6 @@
 /**
  * Halo Infinite Stat Tracker — React MCP App UI
- * Two-tab dashboard: Last Match + Career Progression
+ * Design language aligned with Halo Infinite's menu UI.
  */
 import type { App, McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 import { useApp } from '@modelcontextprotocol/ext-apps/react';
@@ -56,6 +56,15 @@ interface PlayerStats {
   medals: MedalEarned[];
 }
 
+interface NextRankInfo {
+  rank: number;
+  tierType: string;
+  rankTitle: string;
+  rankTier: number;
+  xpRequired: number;
+  iconUrl: string | null;
+}
+
 interface CareerProgression {
   currentRank: number;
   isHero: boolean;
@@ -70,6 +79,7 @@ interface CareerProgression {
   overallProgress: number;
   totalRanks: number;
   rankIconUrl: string | null;
+  nextRank: NextRankInfo | null;
 }
 
 interface RankSnapshot {
@@ -93,12 +103,41 @@ interface CareerImpact {
   totalXpRequired: number;
 }
 
+interface ServiceRecordData {
+  gamertag: string | null;
+  matchesCompleted: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  winRate: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  kda: number;
+  accuracy: number;
+  shotsFired: number;
+  shotsHit: number;
+  damageDealt: number;
+  damageTaken: number;
+  headshots: number;
+  meleeKills: number;
+  grenadeKills: number;
+  powerWeaponKills: number;
+  maxKillingSpree: number;
+  suicides: number;
+  betrayals: number;
+  vehicleDestroys: number;
+  timePlayed: string;
+  timePlayedSeconds: number;
+}
+
 interface StatsPayload {
   match: MatchMeta | null;
   player: PlayerStats | null;
   career: CareerProgression | null;
   careerImpact: CareerImpact | null;
   spriteSheet: SpriteSheetInfo | null;
+  serviceRecord?: ServiceRecordData | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +155,6 @@ function parsePayload(result: CallToolResult): StatsPayload | null {
 }
 
 function formatDuration(iso: string): string {
-  // ISO 8601 duration e.g. "PT12M34.567S"
   const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:([\d.]+)S)?/);
   if (!match) return iso;
   const h = match[1] ? `${match[1]}h ` : '';
@@ -146,19 +184,19 @@ function formatNumber(n: number): string {
 
 function outcomeColor(outcome: string): string {
   const o = outcome.toLowerCase();
-  if (o === 'win' || o === '2' || o === 'victory') return '#4ade80';
-  if (o === 'loss' || o === 'lose' || o === '3' || o === 'defeat') return '#f87171';
-  if (o === 'didnotfinish' || o === 'dnf') return '#94a3b8';
-  return '#fbbf24';
+  if (o === 'win' || o === '2' || o === 'victory') return C.blue;
+  if (o === 'loss' || o === 'lose' || o === '3' || o === 'defeat') return C.red;
+  if (o === 'didnotfinish' || o === 'dnf') return C.textDim;
+  return C.amber;
 }
 
 function outcomeLabel(outcome: string): string {
   const o = outcome.toLowerCase();
-  if (o === 'win' || o === '2' || o === 'victory') return 'Victory';
-  if (o === 'loss' || o === 'lose' || o === '3' || o === 'defeat') return 'Defeat';
-  if (o === 'draw' || o === 'tie' || o === '1') return 'Draw';
+  if (o === 'win' || o === '2' || o === 'victory') return 'VICTORY';
+  if (o === 'loss' || o === 'lose' || o === '3' || o === 'defeat') return 'DEFEAT';
+  if (o === 'draw' || o === 'tie' || o === '1') return 'DRAW';
   if (o === 'didnotfinish' || o === 'dnf') return 'DNF';
-  return outcome;
+  return outcome.toUpperCase();
 }
 
 function medalDifficultyColor(d: number): string {
@@ -225,7 +263,7 @@ function HaloStatsApp() {
 }
 
 // ---------------------------------------------------------------------------
-// Dashboard (two-tab)
+// Dashboard
 // ---------------------------------------------------------------------------
 
 interface DashboardProps {
@@ -238,11 +276,11 @@ function Dashboard({ toolResult, hostContext }: DashboardProps) {
   const data = toolResult ? parsePayload(toolResult) : null;
   const isError = toolResult?.isError;
 
-  // Build list of available tabs based on data
   const tabs: Array<{ id: string; label: string }> = [];
-  if (data?.match || data?.player) tabs.push({ id: 'match', label: 'Last Match' });
-  if (data?.careerImpact) tabs.push({ id: 'careerImpact', label: 'Career Impact' });
-  if (data?.career) tabs.push({ id: 'career', label: 'Career' });
+  if (data?.match || data?.player) tabs.push({ id: 'match', label: 'LAST MATCH' });
+  if (data?.careerImpact) tabs.push({ id: 'careerImpact', label: 'CAREER IMPACT' });
+  if (data?.serviceRecord) tabs.push({ id: 'serviceRecord', label: 'SERVICE RECORD' });
+  if (data?.career && !data?.serviceRecord) tabs.push({ id: 'career', label: 'CAREER' });
 
   const [tab, setTab] = useState<string>('');
   const activeTab = tabs.find((t) => t.id === tab) ? tab : tabs[0]?.id ?? '';
@@ -261,22 +299,21 @@ function Dashboard({ toolResult, hostContext }: DashboardProps) {
         paddingRight: hostContext?.safeAreaInsets?.right,
         paddingBottom: hostContext?.safeAreaInsets?.bottom,
         paddingLeft: hostContext?.safeAreaInsets?.left,
-        maxWidth: 640,
-        margin: '0 auto',
-        padding: '10px',
+        padding: 16,
         background: C.bg,
         color: C.text,
+        fontFamily: FONT,
+        minHeight: '100vh',
       }}
     >
-      {/* Tab bar — only show if more than one tab */}
       {tabs.length > 1 && (
-        <div style={styles.tabBar}>
+        <div style={S.tabBar}>
           {tabs.map((t) => (
             <button
               key={t.id}
               style={{
-                ...styles.tab,
-                ...(activeTab === t.id ? styles.tabActive : {}),
+                ...S.tab,
+                ...(activeTab === t.id ? S.tabActive : {}),
               }}
               onClick={() => setTab(t.id)}
             >
@@ -295,6 +332,9 @@ function Dashboard({ toolResult, hostContext }: DashboardProps) {
       {activeTab === 'career' && (
         <CareerTab career={data.career} />
       )}
+      {activeTab === 'serviceRecord' && data.serviceRecord && (
+        <ServiceRecordTab serviceRecord={data.serviceRecord} career={data.career} />
+      )}
     </main>
   );
 }
@@ -309,71 +349,66 @@ function MatchTab({ match, player, spriteSheet }: { match: MatchMeta | null; pla
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {/* Match header */}
-      <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span
-              style={{
-                ...styles.badge,
-                background: 'transparent',
-                borderColor: outcomeColor(player.outcome),
-                color: outcomeColor(player.outcome),
-              }}
-            >
-              {outcomeLabel(player.outcome)}
-            </span>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, letterSpacing: '0.5px' }}>{match.mapName}</div>
-              <div style={styles.cardSubtitle}>
-                {match.modeName}{match.playlistName ? ` — ${match.playlistName}` : ''}
-              </div>
-            </div>
-          </div>
-          <div style={{ textAlign: 'right' as const }}>
-            {match.endTime && <div style={{ fontSize: 11, color: C.textDim }}>{formatDate(match.endTime)}</div>}
-            {match.duration && <div style={{ fontSize: 11, color: C.textDim }}>{formatDuration(match.duration)}</div>}
-          </div>
+      <div style={S.card}>
+        <div
+          style={{
+            fontSize: 22,
+            fontWeight: 700,
+            color: outcomeColor(player.outcome),
+            letterSpacing: '3px',
+            marginBottom: 8,
+          }}
+        >
+          {outcomeLabel(player.outcome)}
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: C.text, letterSpacing: '1px', textTransform: 'uppercase' as const }}>
+          {match.mapName}
+        </div>
+        <div style={{ fontSize: 12, color: C.textDim, letterSpacing: '0.5px', marginTop: 2 }}>
+          {match.modeName}{match.playlistName ? ` \u2014 ${match.playlistName}` : ''}
+        </div>
+        <div style={{ fontSize: 11, color: C.textDim, marginTop: 6, letterSpacing: '0.5px' }}>
+          {match.endTime && formatDate(match.endTime)}
+          {match.endTime && match.duration && ' \u00b7 '}
+          {match.duration && formatDuration(match.duration)}
         </div>
       </div>
 
-      {/* Stats — single card with KDA row + detail grid */}
-      <div style={styles.card}>
-        <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: 10 }}>
-          <StatCell label="Kills" value={player.kills} />
-          <StatCell label="Deaths" value={player.deaths} />
-          <StatCell label="Assists" value={player.assists} />
+      {/* Primary KDA */}
+      <div style={S.card}>
+        <div style={{ display: 'flex', gap: 24 }}>
+          <StatCell label="KILLS" value={player.kills} />
+          <StatCell label="DEATHS" value={player.deaths} />
+          <StatCell label="ASSISTS" value={player.assists} />
           <StatCell label="KDA" value={player.kda.toFixed(2)} />
         </div>
-        <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 10 }}>
-          <div style={styles.statGrid}>
-            <StatCell label="Accuracy" value={player.accuracy !== null ? `${player.accuracy}%` : '—'} />
-            <StatCell label="Score" value={formatNumber(player.score)} />
-            <StatCell label="Headshots" value={player.headshots} />
-            <StatCell label="Dmg Dealt" value={formatNumber(player.damageDealt)} />
-            <StatCell label="Dmg Taken" value={formatNumber(player.damageTaken)} />
-            <StatCell label="Max Spree" value={player.maxKillingSpree} />
-          </div>
+        <Divider />
+        <div style={S.statGrid}>
+          <StatCell label="ACCURACY" value={player.accuracy !== null ? `${player.accuracy}%` : '\u2014'} />
+          <StatCell label="SCORE" value={formatNumber(player.score)} />
+          <StatCell label="HEADSHOTS" value={player.headshots} />
+          <StatCell label="DMG DEALT" value={formatNumber(player.damageDealt)} />
+          <StatCell label="DMG TAKEN" value={formatNumber(player.damageTaken)} />
+          <StatCell label="MAX SPREE" value={player.maxKillingSpree} />
         </div>
       </div>
 
-      {/* Medals — prominent icon grid */}
+      {/* Medals */}
       {player.medals.length > 0 && (
-        <div style={styles.card}>
-          <div style={styles.cardTitle}>
-            Medals
-          </div>
-          <div style={styles.medalGrid}>
+        <div style={S.card}>
+          <SectionTitle>MEDALS</SectionTitle>
+          <div style={S.medalGrid}>
             {player.medals.map((m) => {
               const dc = medalDifficultyColor(m.difficulty);
               return (
                 <div
                   key={String(m.nameId)}
                   style={{
-                    ...styles.medalTile,
-                    background: `radial-gradient(ellipse at center, ${dc}30 0%, ${C.bg} 70%)`,
-                    borderColor: `${dc}50`,
+                    ...S.medalTile,
+                    background: `radial-gradient(ellipse at center, ${dc}25 0%, ${C.bg} 70%)`,
+                    borderColor: `${dc}40`,
                   }}
                   title={`${m.name}: ${m.description}`}
                 >
@@ -387,9 +422,9 @@ function MatchTab({ match, player, spriteSheet }: { match: MatchMeta | null; pla
                     <div style={{ width: 40, height: 40, background: C.border }} />
                   )}
                   {m.count > 1 && (
-                    <span style={styles.medalBadgeCount}>{m.count}</span>
+                    <span style={S.medalBadgeCount}>{m.count}</span>
                   )}
-                  <span style={styles.medalTileLabel}>{m.name}</span>
+                  <span style={S.medalTileLabel}>{m.name}</span>
                 </div>
               );
             })}
@@ -405,19 +440,19 @@ function MatchTab({ match, player, spriteSheet }: { match: MatchMeta | null; pla
 // ---------------------------------------------------------------------------
 
 function rankLabel(snap: RankSnapshot): string {
-  if (snap.isHero) return 'Hero';
-  return `${snap.tierType} ${snap.rankTitle} ${snap.rankTier}`;
+  if (snap.isHero) return 'HERO';
+  return `${snap.tierType} ${snap.rankTitle} ${snap.rankTier}`.toUpperCase();
 }
 
 function RankBadge({ snap, dimmed }: { snap: RankSnapshot; dimmed?: boolean }) {
   return (
     <div
       style={{
-        ...styles.rankBadge,
+        ...S.rankBadge,
         background: snap.isHero
           ? 'linear-gradient(135deg, #ffd700, #ff8c00)'
           : `linear-gradient(135deg, ${tierColor(snap.tierType)}, ${tierColor(snap.tierType)}88)`,
-        opacity: dimmed ? 0.5 : 1,
+        opacity: dimmed ? 0.4 : 1,
       }}
     >
       {snap.currentRank}
@@ -430,87 +465,69 @@ function CareerImpactTab({ impact }: { impact: CareerImpact }) {
   const sameRank = !rankedUp;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {/* XP Earned card */}
-      <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <span
-            style={{
-              ...styles.badge,
-              background: 'transparent',
-              borderColor: C.accent,
-              color: C.accent,
-            }}
-          >
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* XP Earned */}
+      <div style={S.card}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <span style={{ ...S.badge, borderColor: C.blue, color: C.blue }}>
             +{formatNumber(xpEarned)} XP
           </span>
           {rankedUp && (
-            <span
-              style={{
-                ...styles.badge,
-                background: 'transparent',
-                borderColor: C.gold,
-                color: C.gold,
-              }}
-            >
-              RANK UP!
+            <span style={{ ...S.badge, borderColor: C.gold, color: C.gold }}>
+              RANK UP
             </span>
           )}
         </div>
       </div>
 
-      {/* Rank comparison card */}
-      <div style={styles.card}>
-        <div style={styles.cardTitle}>Rank Progress</div>
+      {/* Rank comparison */}
+      <div style={S.card}>
+        <SectionTitle>RANK PROGRESS</SectionTitle>
         {sameRank ? (
-          // Same rank: show before/after progress within the rank
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
               <RankBadge snap={post} />
               <div>
-                <div style={{ fontWeight: 700, color: C.text, letterSpacing: '0.5px' }}>{rankLabel(post)}</div>
-                <div style={styles.cardSubtitle}>Rank {post.currentRank}</div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: C.text, letterSpacing: '1px' }}>{rankLabel(post)}</div>
+                <div style={{ fontSize: 11, color: C.textDim, letterSpacing: '0.5px' }}>Rank {post.currentRank}</div>
               </div>
             </div>
             {!post.isHero && (
               <div>
-                {/* Before progress bar (dimmed) */}
-                <div style={{ opacity: 0.4, marginBottom: 4 }}>
+                <div style={{ opacity: 0.35, marginBottom: 6 }}>
                   <ProgressBar
                     progress={pre.rankProgress}
-                    color={C.accent}
-                    label={`Before: ${formatNumber(pre.partialProgress)} / ${formatNumber(pre.xpRequired)} XP`}
+                    color={C.blue}
+                    label={`BEFORE: ${formatNumber(pre.partialProgress)} / ${formatNumber(pre.xpRequired)} XP`}
                   />
                 </div>
-                {/* After progress bar */}
                 <ProgressBar
                   progress={post.rankProgress}
-                  color={C.accent}
-                  label={`After: ${formatNumber(post.partialProgress)} / ${formatNumber(post.xpRequired)} XP (+${formatNumber(xpEarned)})`}
+                  color={C.blue}
+                  label={`AFTER: ${formatNumber(post.partialProgress)} / ${formatNumber(post.xpRequired)} XP (+${formatNumber(xpEarned)})`}
                 />
               </div>
             )}
           </div>
         ) : (
-          // Rank up: show pre → post
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ textAlign: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <div>
                 <RankBadge snap={pre} dimmed />
-                <div style={{ ...styles.cardSubtitle, marginTop: 4, opacity: 0.5 }}>{rankLabel(pre)}</div>
+                <div style={{ fontSize: 10, color: C.textDim, marginTop: 4, letterSpacing: '0.5px', opacity: 0.5 }}>{rankLabel(pre)}</div>
               </div>
-              <span style={{ fontSize: 20, color: C.textDim }}>&rarr;</span>
-              <div style={{ textAlign: 'center' }}>
+              <span style={{ fontSize: 20, color: C.textDim, fontWeight: 300 }}>&rarr;</span>
+              <div>
                 <RankBadge snap={post} />
-                <div style={{ ...styles.cardSubtitle, marginTop: 4, fontWeight: 700, color: C.text }}>{rankLabel(post)}</div>
+                <div style={{ fontSize: 10, color: C.text, fontWeight: 700, marginTop: 4, letterSpacing: '0.5px' }}>{rankLabel(post)}</div>
               </div>
             </div>
             {!post.isHero && (
-              <div style={{ marginTop: 8 }}>
+              <div style={{ marginTop: 10 }}>
                 <ProgressBar
                   progress={post.rankProgress}
-                  color={C.accent}
-                  label={`${formatNumber(post.partialProgress)} / ${formatNumber(post.xpRequired)} XP into new rank`}
+                  color={C.blue}
+                  label={`${formatNumber(post.partialProgress)} / ${formatNumber(post.xpRequired)} XP`}
                 />
               </div>
             )}
@@ -518,13 +535,13 @@ function CareerImpactTab({ impact }: { impact: CareerImpact }) {
         )}
       </div>
 
-      {/* Overall progress card */}
-      <div style={styles.card}>
-        <div style={styles.cardTitle}>Overall Progress</div>
+      {/* Overall progress */}
+      <div style={S.card}>
+        <SectionTitle>OVERALL PROGRESS</SectionTitle>
         <ProgressBar
           progress={impact.overallProgressAfter}
-          color={C.accent}
-          label={`${(impact.overallProgressBefore * 100).toFixed(2)}% → ${(impact.overallProgressAfter * 100).toFixed(2)}%`}
+          color={C.blue}
+          label={`${(impact.overallProgressBefore * 100).toFixed(2)}% \u2192 ${(impact.overallProgressAfter * 100).toFixed(2)}%`}
         />
       </div>
     </div>
@@ -541,20 +558,20 @@ function CareerTab({ career }: { career: CareerProgression | null }) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       {/* Current rank */}
-      <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={S.card}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           {career.rankIconUrl ? (
             <img
               src={career.rankIconUrl}
               alt={`Rank ${career.currentRank}`}
-              style={{ width: 44, height: 44, flexShrink: 0, objectFit: 'contain' }}
+              style={{ width: 48, height: 48, flexShrink: 0, objectFit: 'contain' }}
             />
           ) : (
             <div
               style={{
-                ...styles.rankBadge,
+                ...S.rankBadge,
                 background: career.isHero
                   ? 'linear-gradient(135deg, #ffd700, #ff8c00)'
                   : `linear-gradient(135deg, ${tierColor(career.tierType)}, ${tierColor(career.tierType)}88)`,
@@ -564,52 +581,222 @@ function CareerTab({ career }: { career: CareerProgression | null }) {
             </div>
           )}
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: C.text, letterSpacing: '0.5px', marginBottom: 4 }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: C.text, letterSpacing: '2px', textTransform: 'uppercase' as const }}>
               {career.rankTitle || `${career.tierType} ${career.rankTier}`}
             </div>
-            <div style={styles.cardSubtitle}>
+            <div style={{ fontSize: 11, color: C.textDim, letterSpacing: '0.5px', marginTop: 2 }}>
               {career.isHero
-                ? 'Maximum rank achieved!'
+                ? 'Maximum rank achieved'
                 : `Rank ${career.currentRank} of ${career.totalRanks}`}
             </div>
           </div>
         </div>
       </div>
 
-      {/* XP Progress */}
+      {/* XP Progress + Next Rank */}
       {!career.isHero && (
-        <div style={styles.card}>
-          <div style={styles.cardTitle}>Rank Progress</div>
+        <div style={S.card}>
+          <SectionTitle>RANK PROGRESS</SectionTitle>
           <ProgressBar
             progress={career.rankProgress}
-            color={C.accent}
+            color={C.blue}
             label={`${formatNumber(career.currentXp)} / ${formatNumber(career.xpRequired)} XP`}
           />
+          {career.nextRank && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 9, fontWeight: 600, color: C.textDim, letterSpacing: '1.5px', marginBottom: 6 }}>
+                NEXT RANK
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {career.nextRank.iconUrl ? (
+                  <img
+                    src={career.nextRank.iconUrl}
+                    alt={`Rank ${career.nextRank.rank}`}
+                    style={{ width: 40, height: 40, flexShrink: 0, objectFit: 'contain', opacity: 0.6 }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      ...S.rankBadge,
+                      width: 40,
+                      height: 40,
+                      fontSize: 14,
+                      opacity: 0.6,
+                      background: `linear-gradient(135deg, ${tierColor(career.nextRank.tierType)}, ${tierColor(career.nextRank.tierType)}88)`,
+                    }}
+                  >
+                    {career.nextRank.rank}
+                  </div>
+                )}
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.text, letterSpacing: '1px', textTransform: 'uppercase' as const, opacity: 0.7 }}>
+                    {career.nextRank.rankTitle || `${career.nextRank.tierType} ${career.nextRank.rankTier}`}
+                  </div>
+                  <div style={{ fontSize: 10, color: C.textDim, letterSpacing: '0.5px', marginTop: 1 }}>
+                    {formatNumber(career.xpRequired - career.currentXp)} XP remaining
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* Overall progress to Hero */}
-      <div style={styles.card}>
-        <div style={styles.cardTitle}>
-          {career.isHero ? 'Journey Complete' : 'Progress to Hero'}
-        </div>
+      <div style={S.card}>
+        <SectionTitle>{career.isHero ? 'JOURNEY COMPLETE' : 'PROGRESS TO HERO'}</SectionTitle>
         <ProgressBar
           progress={career.overallProgress}
-          color={career.isHero ? C.gold : C.accent}
+          color={career.isHero ? C.gold : C.blue}
           label={`${formatNumber(career.xpEarnedToDate)} / ${formatNumber(career.totalXpRequired)} XP`}
         />
-        <div style={{ ...styles.meta, marginTop: 8 }}>
-          <span>{Math.round(career.overallProgress * 100)}% complete</span>
+        <div style={{ fontSize: 11, color: C.textDim, marginTop: 6, letterSpacing: '0.5px' }}>
+          {Math.round(career.overallProgress * 100)}% complete
         </div>
       </div>
 
       {/* Summary stats */}
-      <div style={styles.card}>
-        <div style={styles.cardTitle}>Summary</div>
-        <div style={styles.statGrid}>
-          <StatCell label="Current Rank" value={career.currentRank} />
-          <StatCell label="Total Ranks" value={career.totalRanks} />
-          <StatCell label="XP Earned" value={formatNumber(career.xpEarnedToDate)} />
+      <div style={S.card}>
+        <SectionTitle>SUMMARY</SectionTitle>
+        <div style={{ display: 'flex', gap: 24 }}>
+          <StatCell label="CURRENT RANK" value={career.currentRank} />
+          <StatCell label="TOTAL RANKS" value={career.totalRanks} />
+          <StatCell label="XP EARNED" value={formatNumber(career.xpEarnedToDate)} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Service Record Tab
+// ---------------------------------------------------------------------------
+
+function formatTimePlayed(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function ServiceRecordTab({
+  serviceRecord: sr,
+  career,
+}: {
+  serviceRecord: ServiceRecordData;
+  career: CareerProgression | null;
+}) {
+  const kd = sr.deaths > 0 ? (sr.kills / sr.deaths).toFixed(2) : sr.kills.toFixed(2);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {/* Gamertag header */}
+      {sr.gamertag && (
+        <div style={S.card}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.text, letterSpacing: '2px', textTransform: 'uppercase' as const }}>
+            {sr.gamertag}
+          </div>
+          <div style={{ fontSize: 11, color: C.textDim, letterSpacing: '1px', marginTop: 2 }}>MATCHMADE SERVICE RECORD</div>
+        </div>
+      )}
+
+      {/* Career rank (compact) */}
+      {career && (
+        <div style={S.card}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            {career.rankIconUrl ? (
+              <img
+                src={career.rankIconUrl}
+                alt={`Rank ${career.currentRank}`}
+                style={{ width: 48, height: 48, flexShrink: 0, objectFit: 'contain' }}
+              />
+            ) : (
+              <div
+                style={{
+                  ...S.rankBadge,
+                  background: career.isHero
+                    ? 'linear-gradient(135deg, #ffd700, #ff8c00)'
+                    : `linear-gradient(135deg, ${tierColor(career.tierType)}, ${tierColor(career.tierType)}88)`,
+                }}
+              >
+                {career.currentRank}
+              </div>
+            )}
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, letterSpacing: '1.5px', textTransform: 'uppercase' as const }}>
+                {career.isHero
+                  ? 'Hero'
+                  : `${career.tierType} ${career.rankTitle} ${career.rankTier}`}
+              </div>
+              {!career.isHero && (
+                <div style={{ marginTop: 6 }}>
+                  <ProgressBar
+                    progress={career.rankProgress}
+                    color={C.blue}
+                    label={`${formatNumber(career.currentXp)} / ${formatNumber(career.xpRequired)} XP`}
+                  />
+                </div>
+              )}
+              {career.isHero && (
+                <div style={{ fontSize: 11, color: C.textDim, letterSpacing: '0.5px', marginTop: 2 }}>Maximum rank achieved</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Matches */}
+      <div style={S.card}>
+        <SectionTitle>MATCHES</SectionTitle>
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+          <StatCell label="PLAYED" value={formatNumber(sr.matchesCompleted)} />
+          <StatCell label="WINS" value={formatNumber(sr.wins)} />
+          <StatCell label="LOSSES" value={formatNumber(sr.losses)} />
+          <StatCell label="WIN RATE" value={`${sr.winRate}%`} />
+          {sr.ties > 0 && <StatCell label="TIES" value={formatNumber(sr.ties)} />}
+        </div>
+      </div>
+
+      {/* Combat */}
+      <div style={S.card}>
+        <SectionTitle>COMBAT</SectionTitle>
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+          <StatCell label="KILLS" value={formatNumber(sr.kills)} />
+          <StatCell label="DEATHS" value={formatNumber(sr.deaths)} />
+          <StatCell label="ASSISTS" value={formatNumber(sr.assists)} />
+          <StatCell label="KDA" value={sr.kda.toFixed(2)} />
+        </div>
+        <Divider />
+        <div style={S.statGrid}>
+          <StatCell label="K/D" value={kd} />
+          <StatCell label="HEADSHOTS" value={formatNumber(sr.headshots)} />
+          <StatCell label="MAX SPREE" value={formatNumber(sr.maxKillingSpree)} />
+        </div>
+      </div>
+
+      {/* Accuracy & Damage */}
+      <div style={S.card}>
+        <SectionTitle>ACCURACY &amp; DAMAGE</SectionTitle>
+        <div style={S.statGrid}>
+          <StatCell label="ACCURACY" value={`${sr.accuracy}%`} />
+          <StatCell label="SHOTS HIT" value={formatNumber(sr.shotsHit)} />
+          <StatCell label="SHOTS FIRED" value={formatNumber(sr.shotsFired)} />
+          <StatCell label="DMG DEALT" value={formatNumber(sr.damageDealt)} />
+          <StatCell label="DMG TAKEN" value={formatNumber(sr.damageTaken)} />
+          <StatCell label="MELEE KILLS" value={formatNumber(sr.meleeKills)} />
+        </div>
+      </div>
+
+      {/* Miscellaneous */}
+      <div style={S.card}>
+        <SectionTitle>MISCELLANEOUS</SectionTitle>
+        <div style={S.statGrid}>
+          <StatCell label="GRENADE KILLS" value={formatNumber(sr.grenadeKills)} />
+          <StatCell label="POWER WPN KILLS" value={formatNumber(sr.powerWeaponKills)} />
+          <StatCell label="VEHICLE DESTROYS" value={formatNumber(sr.vehicleDestroys)} />
+          <StatCell label="SUICIDES" value={formatNumber(sr.suicides)} />
+          <StatCell label="BETRAYALS" value={formatNumber(sr.betrayals)} />
+          <StatCell label="TIME PLAYED" value={formatTimePlayed(sr.timePlayedSeconds)} />
         </div>
       </div>
     </div>
@@ -619,6 +806,19 @@ function CareerTab({ career }: { career: CareerProgression | null }) {
 // ---------------------------------------------------------------------------
 // Shared components
 // ---------------------------------------------------------------------------
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={S.sectionTitle}>
+      <span style={S.sectionTitleLine} />
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function Divider() {
+  return <div style={{ borderTop: `1px solid ${C.border}`, margin: '10px 0' }} />;
+}
 
 function MedalSprite({
   spriteSheet,
@@ -631,7 +831,6 @@ function MedalSprite({
 }) {
   const col = spriteIndex % spriteSheet.columns;
   const row = Math.floor(spriteIndex / spriteSheet.columns);
-  // Scale so each sprite cell = displaySize px
   const bgWidth = spriteSheet.columns * displaySize;
 
   return (
@@ -651,9 +850,9 @@ function MedalSprite({
 
 function StatCell({ label, value }: { label: string; value: string | number }) {
   return (
-    <div style={styles.statCell}>
-      <div style={styles.statValue}>{value}</div>
-      <div style={styles.statLabel}>{label}</div>
+    <div style={S.statCell}>
+      <div style={S.statLabel}>{label}</div>
+      <div style={S.statValue}>{value}</div>
     </div>
   );
 }
@@ -670,152 +869,153 @@ function ProgressBar({
   const pct = Math.min(Math.max(progress, 0), 1) * 100;
   return (
     <div>
-      <div style={styles.progressTrack}>
+      <div style={S.progressTrack}>
         <div
           style={{
-            ...styles.progressFill,
+            ...S.progressFill,
             width: `${pct}%`,
             background: color,
           }}
         />
       </div>
-      <div style={{ ...styles.meta, marginTop: 4 }}>{label}</div>
+      <div style={{ fontSize: 10, color: C.textDim, marginTop: 4, letterSpacing: '0.5px' }}>{label}</div>
     </div>
   );
 }
 
 function LoadingView() {
   return (
-    <div style={styles.centered}>
-      <div style={styles.spinner} />
-      <span style={{ marginTop: 8, opacity: 0.7 }}>Loading Spartan data...</span>
+    <div style={{ ...S.centered, fontFamily: FONT }}>
+      <div style={S.spinner} />
+      <span style={{ marginTop: 10, fontSize: 12, letterSpacing: '2px', textTransform: 'uppercase' as const, color: C.textDim }}>
+        Loading Spartan data
+      </span>
     </div>
   );
 }
 
 function ErrorView({ message }: { message: string }) {
   return (
-    <div style={{ ...styles.centered, color: C.red, background: C.bg }}>
-      <div style={{ fontSize: 24, marginBottom: 8 }}>!</div>
-      <span>{message}</span>
+    <div style={{ ...S.centered, color: C.red, background: C.bg, fontFamily: FONT }}>
+      <div style={{ fontSize: 28, marginBottom: 8, fontWeight: 700 }}>!</div>
+      <span style={{ fontSize: 12, letterSpacing: '0.5px' }}>{message}</span>
     </div>
   );
 }
 
 function EmptyState({ text }: { text: string }) {
   return (
-    <div style={{ ...styles.centered, opacity: 0.6, padding: 40 }}>
+    <div style={{ ...S.centered, opacity: 0.5, padding: 40, fontSize: 12, letterSpacing: '1px' }}>
       {text}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Inline styles
+// Design system — Halo Infinite inspired
 // ---------------------------------------------------------------------------
 
-// Halo Infinite color palette
+const FONT = "'Saira Condensed', 'Barlow Condensed', 'Arial Narrow', Arial, sans-serif";
+
 const C = {
-  bg: '#1b2028',
-  cardBg: '#232a34',
-  border: '#3a3f47',
-  text: '#e8eaed',
-  textDim: '#8b919a',
-  accent: '#38bdf8',
+  bg: '#0f1923',
+  cardBg: '#162029',
+  border: 'rgba(255, 255, 255, 0.12)',
+  borderBright: 'rgba(255, 255, 255, 0.35)',
+  text: '#ffffff',
+  textDim: 'rgba(255, 255, 255, 0.42)',
+  blue: '#3db8f5',
   gold: '#d4a835',
   green: '#4ade80',
   red: '#f87171',
   amber: '#fbbf24',
-  slate: '#94a3b8',
 };
 
-const styles: Record<string, React.CSSProperties> = {
+const S: Record<string, React.CSSProperties> = {
   tabBar: {
     display: 'flex',
-    gap: 0,
-    marginBottom: 10,
-    borderBottom: `1px solid ${C.border}`,
+    gap: 2,
+    marginBottom: 2,
   },
   tab: {
     flex: 1,
-    padding: '8px 0',
-    border: 'none',
+    padding: '10px 12px',
+    border: `1px solid ${C.border}`,
     background: 'transparent',
     color: C.textDim,
     fontSize: 11,
-    fontWeight: 600,
+    fontWeight: 700,
+    fontFamily: FONT,
     cursor: 'pointer',
-    borderBottom: '2px solid transparent',
     textTransform: 'uppercase' as const,
-    letterSpacing: '1.5px',
-    transition: 'color 0.15s, border-color 0.15s',
+    letterSpacing: '2px',
+    transition: 'color 0.15s, border-color 0.15s, background 0.15s',
+    textAlign: 'left' as const,
   },
   tabActive: {
-    color: C.accent,
-    borderBottomColor: C.accent,
+    color: C.text,
+    borderColor: C.borderBright,
+    background: 'rgba(255, 255, 255, 0.06)',
   },
   card: {
     background: C.cardBg,
-    borderRadius: 0,
-    padding: 12,
+    padding: '14px 16px',
     border: `1px solid ${C.border}`,
   },
-  cardTitle: {
+  sectionTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
     fontSize: 11,
-    fontWeight: 600,
-    marginBottom: 8,
+    fontWeight: 700,
     color: C.textDim,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '1.5px',
+    letterSpacing: '2.5px',
+    marginBottom: 10,
   },
-  cardSubtitle: {
-    fontSize: 11,
-    color: C.textDim,
-    letterSpacing: '0.5px',
+  sectionTitleLine: {
+    width: 3,
+    height: 12,
+    background: C.borderBright,
+    flexShrink: 0,
   },
   badge: {
     display: 'inline-block',
-    padding: '4px 12px',
-    borderRadius: 0,
-    fontSize: 10,
-    fontWeight: 700,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '1.5px',
-    border: '1px solid',
-  },
-  meta: {
-    display: 'flex',
-    gap: 12,
+    padding: '5px 14px',
     fontSize: 11,
-    color: C.textDim,
-    letterSpacing: '0.5px',
+    fontWeight: 700,
+    fontFamily: FONT,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '2px',
+    border: '1px solid',
+    background: 'transparent',
   },
   statGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(3, 1fr)',
-    gap: 4,
+    gap: '8px 20px',
   },
   statCell: {
-    textAlign: 'center' as const,
-    padding: '4px 0',
-  },
-  statValue: {
-    fontSize: 17,
-    fontWeight: 700,
-    color: C.text,
-    letterSpacing: '0.5px',
+    textAlign: 'left' as const,
+    padding: '2px 0',
   },
   statLabel: {
     fontSize: 9,
+    fontWeight: 600,
     color: C.textDim,
-    marginTop: 2,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '1px',
+    letterSpacing: '1.5px',
+    marginBottom: 1,
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: 700,
+    color: C.text,
+    letterSpacing: '0.5px',
+    lineHeight: '1.1',
   },
   medalGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))',
-    gap: 6,
+    gap: 4,
   },
   medalTile: {
     display: 'flex',
@@ -848,10 +1048,9 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: '100%',
   },
   rankBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: 0,
-    border: `1px solid ${C.border}`,
+    width: 48,
+    height: 48,
+    border: `1px solid ${C.borderBright}`,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -862,14 +1061,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   progressTrack: {
     height: 4,
-    borderRadius: 0,
-    background: C.bg,
+    background: 'rgba(255, 255, 255, 0.08)',
     overflow: 'hidden',
     border: `1px solid ${C.border}`,
   },
   progressFill: {
     height: '100%',
-    borderRadius: 0,
     transition: 'width 0.4s ease',
   },
   centered: {
@@ -880,20 +1077,26 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: 200,
     textAlign: 'center' as const,
     color: C.textDim,
+    background: C.bg,
   },
   spinner: {
     width: 28,
     height: 28,
     border: `2px solid ${C.border}`,
-    borderTopColor: C.accent,
+    borderTopColor: C.blue,
     borderRadius: '50%',
     animation: 'spin 0.8s linear infinite',
   },
 };
 
-// Inject keyframes for spinner
+// Inject keyframes + Google Fonts
 const styleSheet = document.createElement('style');
-styleSheet.textContent = `@keyframes spin { to { transform: rotate(360deg); } }`;
+styleSheet.textContent = [
+  "@import url('https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400;600;700;800&display=swap');",
+  '@keyframes spin { to { transform: rotate(360deg); } }',
+  `* { box-sizing: border-box; margin: 0; padding: 0; }`,
+  `body { background: ${C.bg}; margin: 0; }`,
+].join('\n');
 document.head.appendChild(styleSheet);
 
 // ---------------------------------------------------------------------------

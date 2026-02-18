@@ -6,14 +6,14 @@
   "main": "dist/server.js",
   "types": "dist/server.d.ts",
   "scripts": {
-    "build": "tsc --noEmit && cross-env INPUT=mcp-app.html vite build && tsc -p tsconfig.server.json && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js && esbuild main.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.js --banner:js='#!/usr/bin/env node'",
+    "build": "tsc --noEmit && cross-env INPUT=mcp-app.html vite build && tsc -p tsconfig.server.json && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js && esbuild main.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.js --banner:js=\"#!/usr/bin/env node\"",
     "watch": "cross-env INPUT=mcp-app.html vite build --watch",
     "serve": "tsx main.ts",
     "dev": "cross-env NODE_ENV=development concurrently 'npm run watch' 'npm run serve'"
   },
   "dependencies": {
     "@dendotdev/conch": "1.0.1",
-    "@dendotdev/grunt": "^1.0.12",
+    "@dendotdev/grunt": "^1.0.13",
     "@modelcontextprotocol/ext-apps": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.24.0",
     "cors": "^2.8.5",
