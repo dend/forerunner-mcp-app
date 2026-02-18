@@ -12,98 +12,109 @@ npm run serve   # tsx main.ts
 npm run dev     # concurrent vite watch + tsx watch
 ```
 
-## Halo Infinite API Response Format
+## Architecture
 
-The grunt Node.js library does `JSON.parse()` on raw API responses with **no field name transformation**. All field names come back in **PascalCase** from the Halo API, even though the TypeScript type definitions in the grunt source use camelCase. Always access fields using both casings via the `pick()` helper in `server.ts`.
+```
+auth.ts         — Xbox Live OAuth + Spartan token chain, encrypted token storage
+server.ts       — MCP server: tools (halo_authenticate, halo_match_stats, halo_career, halo_service_record) + UI resource
+src/mcp-app.tsx — React UI (Halo Infinite-styled), bundled into a single HTML file by Vite
+main.ts         — Entry point, wires up MCP server to stdio transport
+config.json     — Azure Entra app client ID + redirect URI (not committed; copy from config.example.json)
+tokens.bin      — Encrypted token cache (AES-256-GCM, machine-bound key)
+```
+
+## Authentication
+
+### Token Chain
+
+OAuth (Azure Entra) → Xbox User Token → Xbox XSTS Token → Halo XSTS Token → Spartan Token
+
+Libraries: `@dendotdev/conch` for Xbox Live auth, `@dendotdev/grunt`'s `HaloAuthenticationClient` for Spartan tokens.
+
+### Key Details
+
+- **config.json** must have `clientId` (Azure Entra app registration) and `redirectUri` (default `http://localhost:8787/callback`)
+- First auth opens browser for Microsoft sign-in, captures OAuth code via local HTTP server on the redirect port
+- Tokens are encrypted at rest in `tokens.bin` using AES-256-GCM; encryption key is derived from `hostname() + userInfo().username` via scrypt — **machine-bound**, not portable
+- Spartan tokens are cached for 1 hour (with 5-min early refresh). On expiry, the refresh token is used automatically; full re-auth only happens if refresh fails
+- **XBL token** (format: `XBL3.0 x={userhash};{token}`) is stored alongside Spartan token and needed for Xbox People Hub API (gamertag lookups)
+- `getOrCreateClient()` returns `{ client: HaloInfiniteClient, xuid: string, xblToken: string }`
+- After creating the client, a **clearance/flight token** is fetched via `client.settings.getActiveClearance('1.13')` — required for some API endpoints to work
+
+### Gamertag → XUID Resolution
+
+To look up another player, resolve their gamertag to an XUID via Xbox People Hub:
+```
+GET https://peoplehub.xboxlive.com/users/me/people/search/decoration/detail,preferredColor?q={gamertag}&maxItems=25
+Headers: Authorization: {xblToken}, x-xbl-contract-version: 3
+```
+Returns `{ people: [{ xuid, gamertag }] }`. Match case-insensitively on gamertag.
+
+## Halo Infinite API — grunt Library
+
+### Type System
+
+The grunt library exports proper TypeScript types (`MatchStats`, `MatchHistoryResponse`, `Player`, `CoreStats`, `Medal`, `MedalMetadata`, `PlayerServiceRecord`, `CareerRank`, `RewardTrack`, etc.) and the API returns **PascalCase** field names matching these types. Use the typed interfaces directly — no need for dynamic property access.
+
+### Known Type ↔ API Mismatches
+
+Two fields where the grunt type definition doesn't match the actual API response:
+
+1. **`CoreStats.HeadshotKills`** — the API actually returns `Headshots`. Use the extended type:
+   ```ts
+   type ApiCoreStats = CoreStats & { Headshots?: number };
+   ```
+   Then access: `core?.Headshots ?? core?.HeadshotKills ?? 0`
+
+2. **`MedalMetadata.SpriteSheet`** — the type says `{ SpriteSheet?: SpriteSheet }` with `{ Path, SpriteWidth, SpriteHeight, Columns, Rows }`, but the API actually returns a nested structure:
+   ```ts
+   type ApiMedalMetadata = MedalMetadata & {
+     Sprites?: { Small?: { Path?: string; Columns?: number; Size?: number } };
+   };
+   ```
+   Access: `meta.Sprites?.Small?.Path`, not `meta.SpriteSheet?.Path`
+
+### Response Checking
+
+All grunt API calls return `HaloApiResult<T>`. Always check with `isSuccess(result)` or `isNotModified(result)` before accessing `.result`.
+
+### DisplayString
+
+Many CMS fields (`RankTitle`, `Medal.Name`, `Medal.Description`) are `DisplayString` objects. Access the value via `.Value` property:
+```ts
+rankDef.RankTitle?.Value   // → "Captain"
+medal.Name?.Value          // → "Double Kill"
+```
 
 ## Match Stats Data Model
 
 ### API Call Chain
 
-1. `client.stats.getMatchHistory(xuid, 0, 1, MatchType.All)` → last match record
-2. `client.stats.getMatchStats(matchId)` → full match details
-
-### Match History Response
-
-```
-{
-  Results: [
-    {
-      MatchId: "guid-string",
-      MatchInfo: { ... },
-      ...
-    }
-  ],
-  Count: number,
-  ResultCount: number
-}
-```
-
-### Match Stats Response (`getMatchStats`)
-
-```
-{
-  MatchId: "guid-string",
-  MatchInfo: {
-    StartTime: "ISO8601",
-    EndTime: "ISO8601",
-    Duration: "PT12M34S",          // ISO 8601 duration
-    MapVariant: {
-      AssetId: "guid",
-      VersionId: "guid",
-      PublicName: "Recharge",       // Display name
-    },
-    UgcGameVariant: {
-      PublicName: "Slayer",
-    },
-    Playlist: {
-      PublicName: "Quick Play",
-    },
-  },
-  Players: [
-    {
-      PlayerId: "xuid(1234567890)",  // IMPORTANT: wrapped in xuid() format, not bare number
-      PlayerType: "Human",           // or "Bot"
-      Outcome: "Win" | "Loss" | "Tie" | "DidNotFinish",
-      Rank: number,
-      PlayerTeamStats: [
-        {
-          TeamId: number,
-          Stats: {
-            CoreStats: {
-              Kills: number,
-              Deaths: number,
-              Assists: number,
-              KDA: number,
-              Score: number,
-              PersonalScore: number,
-              ShotsFired: number,
-              ShotsHit: number,
-              DamageDealt: number,
-              DamageTaken: number,
-              Headshots: number,
-              MeleeKills: number,
-              GrenadeKills: number,
-              PowerWeaponKills: number,
-              MaxKillingSpree: number,
-              Medals: [
-                { NameId: number, Count: number, TotalPersonalScoreAwarded: number }
-              ]
-            }
-          }
-        }
-      ]
-    }
-  ],
-  Teams: [ { TeamId: number, Outcome: number, Rank: number, Stats: { ... } } ]
-}
-```
+1. `client.stats.getMatchHistory(xuid, 0, count, MatchType.All)` → match history
+2. `client.stats.getMatchStats(matchId)` → full match details (cast result as `MatchStats`)
+3. `client.gameCms.getMedalMetadata()` → medal definitions (cast as `ApiMedalMetadata`)
 
 ### Finding the Current Player
 
-`PlayerId` is `"xuid(1234567890)"` format — compare against `xuid(${xuid})`, not the bare XUID string.
+`Player.PlayerId` is `"xuid(1234567890)"` format — compare against `` `xuid(${xuid})` ``, not the bare XUID string. Bots have `PlayerId` starting with `"bid"`.
 
-Bots have `PlayerId` starting with `"bid"`.
+### Navigating the Stats Tree
+
+```ts
+const match = result as MatchStats;
+const me = match.Players?.find(p => p.PlayerId === `xuid(${xuid})`);
+const core = me?.PlayerTeamStats?.[0]?.Stats?.CoreStats as ApiCoreStats;
+const medals = core?.Medals ?? [];
+```
+
+### Resolving Map/Mode/Playlist Names
+
+`MatchInfo.MapVariant`, `.UgcGameVariant`, `.Playlist` are `GenericAsset` refs with `AssetId` and `VersionId` but `PublicName` is often empty. Resolve via UGC Discovery:
+```ts
+client.ugcDiscovery.getMap(assetId, versionId)              // → { PublicName }
+client.ugcDiscovery.getUgcGameVariant(assetId, versionId)   // → { PublicName }
+client.ugcDiscovery.getPlaylistWithoutVersion(assetId)       // → { PublicName }
+```
 
 ## Career Rank Data Model
 
@@ -112,74 +123,94 @@ Bots have `PlayerId` starting with `"bid"`.
 1. `client.economy.getPlayerCareerRank([xuid], 'careerRank1')` → current rank + XP
 2. `client.gameCms.getCareerRanks('careerRank1')` → all 272 rank definitions
 
-### Career Rank Response (`getPlayerCareerRank`)
+### Rank Indexing
 
-```
-{
-  RewardTracks: [
-    {
-      Result: {
-        CurrentProgress: {
-          Rank: number,              // 0-indexed; 272 = Hero
-          PartialProgress: number    // XP earned within current rank
-        }
-      }
-    }
-  ]
+- API returns 0-indexed rank in `RewardTracks[0].Result.CurrentProgress.Rank`
+- Rank definitions use 1-based numbering (1–272)
+- Rank 272 (0-indexed) = Hero (max rank). For all others, add 1 to convert: `currentRank = rawRank + 1`
+
+### Career Rank Definition Fields
+
+```ts
+CareerRank {
+  Rank: number           // 1-based (1–272)
+  TierType: string       // "Bronze" | "Silver" | "Gold" | "Platinum" | "Diamond" | "Onyx" | "Hero"
+  RankTitle: DisplayString  // access .Value → "Captain"
+  RankGrade: number      // tier number within the title (e.g., 3 for "Captain III")
+  XpRequiredForRank: number
+  RankLargeIcon: string  // CMS path for rank icon image
+  RankAdornmentIcon: string
 }
 ```
 
-Rank 272 is Hero (max). For all other ranks, add 1 to get the 1-based rank number that matches rank definitions.
-
-### Career Rank Definitions (`getCareerRanks`)
-
-```
-{
-  Ranks: [
-    {
-      Rank: number,                  // 1-based rank number (1–272)
-      TierType: "Bronze" | "Silver" | "Gold" | "Platinum" | "Diamond" | "Onyx" | "Hero",
-      RankTitle: { Value: "Captain" },   // DisplayString — access .Value for the string
-      RankTier: { Value: 3 },            // DisplayString — access .Value for the number
-      XpRequiredForRank: number,
-      RankLargeIcon: "path/to/icon.png",
-      RankAdornmentIcon: "path/to/adornment.png"
-    }
-  ]
-}
-```
-
-### Career Progression Calculation (from OpenSpartan Workshop)
+### Career Progression Calculation
 
 - **Current XP in rank**: `RewardTracks[0].Result.CurrentProgress.PartialProgress`
-- **XP required for rank**: `currentRankDef.XpRequiredForRank`
+- **XP required for current rank**: `currentRankDef.XpRequiredForRank`
 - **XP earned to date**: Sum of `XpRequiredForRank` for all ranks below current + `PartialProgress`
 - **Total XP required**: Sum of all `XpRequiredForRank` across all 272 ranks
-- **Title display**: `"{TierType} {RankTitle.Value} {RankTier.Value}"` (e.g., "Gold Captain 3"), except Hero which is just `"Hero"`
+- **Title display**: `"{TierType} {RankTitle.Value} {RankGrade}"` (e.g., "Gold Captain 3"), except Hero which is just `"Hero"`
+- **Next rank**: Look up rank definition for `currentRank + 1` (null if Hero)
+
+## CMS Images (Rank Icons, Medal Sprites)
+
+### Fetching Rank Icons
+
+Use `client.gameCms.getImage(path)` where `path` comes from `CareerRank.RankLargeIcon`. Returns `{ result: Uint8Array }`. Convert to data URL:
+```ts
+const b64 = Buffer.from(result.result).toString('base64');
+const dataUrl = `data:image/png;base64,${b64}`;
+```
+
+**Known CMS bug**: The path `career_rank/CelebrationMoment/219_Cadet_Onyx_III.png` is incorrect — fix it to `career_rank/CelebrationMoment/19_Cadet_Onyx_III.png`.
+
+### Medal Sprite Sheet
+
+Medal icons are in a single sprite sheet, not individual images. Fetch via:
+```ts
+const spritePath = meta.Sprites?.Small?.Path;
+const spriteResult = await client.gameCms.getGenericWaypointFile(spritePath);
+```
+Each medal has a `SpriteIndex` (0-based). Compute position: `col = index % columns`, `row = floor(index / columns)`. Use CSS `background-position` to display.
+
+## Service Record
+
+### API Call
+
+```ts
+client.stats.getPlayerServiceRecordByXuid(xuid, LifecycleMode.Matchmade)
+```
+
+Returns `PlayerServiceRecord` with top-level fields (`MatchesCompleted`, `Wins`, `Losses`, `Ties`, `TimePlayed`) and `CoreStats` for aggregate combat stats.
 
 ## Medal Data Model
 
 ### API Call
 
-`client.gameCms.getMedalMetadata()` → medal definitions
+`client.gameCms.getMedalMetadata()` → medal definitions (cast as `ApiMedalMetadata`)
 
-### Medal Metadata Response
+### Medal Definition Fields
 
-```
-{
-  Medals: [
-    {
-      NameId: number,                    // Matches CoreStats.Medals[].NameId
-      Name: { Value: "Double Kill" },    // DisplayString
-      Description: { Value: "..." },     // DisplayString
-      SpriteIndex: number,
-      Type: "Spree" | "Mode" | "Multikill" | "Proficiency" | "Skill" | "Style",
-      Difficulty: "Normal" | "Heroic" | "Legendary" | "Mythic",
-      PersonalScore: number,
-      SortingWeight: number
-    }
-  ]
+```ts
+Medal {
+  NameId: number           // join key with CoreStats.Medals[].NameId
+  Name: DisplayString      // .Value → "Double Kill"
+  Description: DisplayString
+  SpriteIndex: number      // position in sprite sheet
+  DifficultyIndex: number  // 0=Normal, 1=Heroic, 2=Legendary, 3=Mythic
+  TypeIndex: number        // medal category
 }
 ```
 
-Join earned medals from `CoreStats.Medals[].NameId` with definitions from `MedalMetadata.Medals[].NameId`.
+Join earned medals from match `CoreStats.Medals[].NameId` with definitions from `MedalMetadata.Medals[].NameId`.
+
+## UI Design
+
+The React UI (`src/mcp-app.tsx`) follows **Halo Infinite's menu design language**:
+- Font: Saira Condensed (Google Fonts) — boxy, condensed, military aesthetic
+- Layout: Left-aligned throughout, no centered content
+- Colors: Dark navy backgrounds (`#0f1923`), semi-transparent white borders, pure white text, Halo blue accent (`#3db8f5`)
+- Typography: Bold (700-800 weight), uppercase with wide letter-spacing (2-2.5px) for labels/headings
+- Cards: Sharp edges (no border-radius), thin white borders, tight 2px gaps between cards
+- Section titles: Small vertical accent bar before the label text
+- All stat values are left-aligned with small uppercase labels above
